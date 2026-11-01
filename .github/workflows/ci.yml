@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md"]
+  pull_request:
+    paths-ignore: ["**.md"]
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same pull request replaces the run in progress; branch and tag runs finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Incremental artifacts only bloat a cache that is rebuilt from scratch on a clean runner.
+  CARGO_INCREMENTAL: "0"
+  # CI never debugs: skip debug info for faster compiles, links and smaller caches.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_NET_RETRY: "10"
+  RUST_BACKTRACE: "1"
+  # Do not set RUSTFLAGS here: it would override the static-CRT setting in .cargo/config.toml.
+
+jobs:
+  # All four jobs run side by side, so a run takes as long as the slowest one (the package).
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  # Native Windows build and tests: covers the cfg(windows) code that the Linux job cannot compile.
+  windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo clippy --workspace --all-targets --locked --target x86_64-pc-windows-msvc -- -D warnings
+      - run: cargo test --workspace --locked --target x86_64-pc-windows-msvc
+
+  package:
+    uses: ./.github/workflows/package.yml

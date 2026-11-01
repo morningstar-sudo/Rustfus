@@ -1,0 +1,10 @@
+/target/
+/dist/
+*.log
+*.pdb
+*.swm
+*.wim
+*.iso
+*.img
+.idea/
+.vscode/

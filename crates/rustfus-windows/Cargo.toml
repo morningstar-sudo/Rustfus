@@ -1,0 +1,20 @@
+[package]
+name = "rustfus-windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+hex.workspace = true
+rustfus-core = { version = "0.1.0", path = "../rustfus-core" }
+rustfus-disk = { version = "0.1.0", path = "../rustfus-disk" }
+rustfus-image = { version = "0.1.0", path = "../rustfus-image" }
+sha2.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

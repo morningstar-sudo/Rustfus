@@ -1,0 +1,4 @@
+# Link the C runtime statically so the portable package runs on machines that do not have the
+# Microsoft Visual C++ Redistributable installed (otherwise: "VCRUNTIME140.dll was not found").
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

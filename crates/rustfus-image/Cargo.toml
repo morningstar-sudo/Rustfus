@@ -1,0 +1,17 @@
+[package]
+name = "rustfus-image"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rustfus-core = { version = "0.1.0", path = "../rustfus-core" }
+sha2.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

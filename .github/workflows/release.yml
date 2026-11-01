@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  # The tag must be v<workspace version>; checked before any minutes are spent building.
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        run: |
+          version=$(awk '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f && /^version *=/{gsub(/[" ]/,"",$0); sub(/^version=/,"",$0); print; exit}' Cargo.toml)
+          if [ -z "$version" ]; then echo "Workspace version was not found" >&2; exit 1; fi
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match workspace version $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # Same checks as every push (lint, Linux and Windows tests, packaged and smoke-tested artifact).
+  ci:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [validate, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Rustfus-windows-x64
+          path: dist
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/Rustfus-$VERSION-windows-x64.zip" \
+            "dist/Rustfus-$VERSION-windows-x64.zip.sha256" \
+            --verify-tag \
+            --generate-notes \
+            --title "Rustfus $VERSION"

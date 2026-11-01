@@ -1,0 +1,19 @@
+[package]
+name = "rustfus-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rustfus-core = { version = "0.1.0", path = "../rustfus-core" }
+rustfus-protocol = { version = "0.1.0", path = "../rustfus-protocol" }
+rustfus-windows = { version = "0.1.0", path = "../rustfus-windows" }
+serde_json.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
