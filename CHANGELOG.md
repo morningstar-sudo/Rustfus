@@ -12,7 +12,7 @@ All notable changes to Rustfus are documented here.
 - USB-only discovery using SetupAPI and native Win32 boot/system-disk detection (no WMI); discovery stops when the system disks cannot be identified or Windows runs from a native-boot VHD.
 - Raw write of x86_64 hybrid Linux ISO images with full read-back verification.
 - Windows installer media creation using MBR, FAT32, trusted `bootsect.exe`, and WIMGAPI splitting.
-- Fault-injection tests, disposable-VHDX acceptance tests (FAT32 pipeline, and raw write plus read-back on a real block device), and a portable ZIP (about 1 MB) with a SHA-256 sidecar and `THIRD-PARTY-NOTICES.txt`, built and smoke-tested by GitHub Actions.
+- Fault-injection tests, disposable-VHDX acceptance tests (FAT32 pipeline, and raw write plus read-back on a real block device), and a portable ZIP (about 1 MB) with a SHA-256 sidecar and `THIRD-PARTY-NOTICES.txt`, built and smoke-tested by GitHub Actions. Every push to `main` that passes CI is published automatically as a pre-release tagged with a UTC timestamp (`v<version>-<yyyyMMdd>.<HHmmss>`).
 
 ### Changed
 

@@ -1,14 +1,9 @@
 name: Package
 
-# Builds the portable Windows release and checks it as a user would receive it. Called by CI (so
-# every push produces a testable artifact) and by the release workflow.
+# Builds the portable Windows release and checks it as a user would receive it. Called by CI, so
+# every push produces a tested artifact; the release workflow publishes that artifact for main.
 on:
   workflow_call:
-    inputs:
-      version:
-        description: "Expected version; the build fails if it differs from the workspace version."
-        type: string
-        default: ""
 
 permissions:
   contents: read
@@ -34,10 +29,7 @@ jobs:
       - run: cargo build --release --locked --target x86_64-pc-windows-msvc -p rustfus-ffi -p rustfus-worker
       - name: Package
         shell: powershell
-        env:
-          EXPECTED_VERSION: ${{ inputs.version }}
-        run: |
-          if ($env:EXPECTED_VERSION) { .\scripts\package.ps1 -Version $env:EXPECTED_VERSION } else { .\scripts\package.ps1 }
+        run: .\scripts\package.ps1
       - name: Smoke test the package
         shell: powershell
         run: |
@@ -56,4 +48,5 @@ jobs:
             dist/Rustfus-*-windows-x64.zip
             dist/Rustfus-*-windows-x64.zip.sha256
           if-no-files-found: error
+          # Releases keep their own copy of the files; this one is only for CI runs.
           retention-days: 14

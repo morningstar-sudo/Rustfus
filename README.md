@@ -65,7 +65,7 @@ cargo build --release --locked --target x86_64-pc-windows-msvc -p rustfus-ffi -p
 
 `package.ps1` builds the front end (`scripts\build-gui.ps1`), assembles `dist\Rustfus-<version>-windows-x64`, writes `THIRD-PARTY-NOTICES.txt`, and creates the ZIP and its SHA-256 sidecar. `scripts\smoke-test.ps1 -Archive <zip>` then checks the package the way a user receives it. The artifacts are unsigned.
 
-GitHub Actions does the same on every push (`ci.yml` calls `package.yml`) and publishes a release for a `v<version>` tag (`release.yml`).
+GitHub Actions does the same on every push (`ci.yml` calls `package.yml`), and every push to `main` that passes CI is published as a timestamped pre-release such as `v0.1.0-20261102.014500` (`release.yml`; see `RELEASE.md`).
 
 Rust code can also be built and checked from Ubuntu on WSL with the MSVC target and `cargo-xwin`:
 
