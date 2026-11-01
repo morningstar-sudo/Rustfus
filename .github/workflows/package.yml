@@ -17,6 +17,8 @@ env:
 jobs:
   package:
     runs-on: windows-2025
+    # CODESIGN_PFX_* are secrets of the "sign" environment, visible only to a job that names it.
+    environment: sign
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -29,6 +31,9 @@ jobs:
       - run: cargo build --release --locked --target x86_64-pc-windows-msvc -p rustfus-ffi -p rustfus-worker
       - name: Package
         shell: powershell
+        env:
+          CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
+          CODESIGN_PFX_PASSWORD: ${{ secrets.CODESIGN_PFX_PASSWORD }}
         run: .\scripts\package.ps1
       - name: Smoke test the package
         shell: powershell

@@ -1,9 +1,9 @@
 name: Release
 
-# Every push to main that passes CI is published as a timestamped pre-release: the tag is
-# v<workspace version>-<UTC date>.<UTC time> of the moment CI started (for example
-# v0.1.0-20261102.014500), created by `gh release create` at the exact commit CI tested.
-# The ZIP is the artifact CI already built and smoke-tested; nothing is rebuilt here.
+# Every push to main that passes CI is published as a pre-release tagged with the UTC time the
+# package was built (for example 20261102.014500), created by `gh release create` at the exact
+# commit CI tested. The ZIP is the (signed) artifact CI already built and smoke-tested; nothing
+# is rebuilt here.
 on:
   workflow_run:
     workflows: [CI]
@@ -25,7 +25,6 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-      STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -34,18 +33,14 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
 
+      # The package name carries the build stamp, which is also the tag.
       - name: Name the release
         id: name
         run: |
           zip=$(ls dist/Rustfus-*-windows-x64.zip)
-          version=$(basename "$zip" | sed -E 's/^Rustfus-(.+)-windows-x64\.zip$/\1/')
-          stamp=$(date -u -d "$STARTED_AT" +%Y%m%d.%H%M%S)
-          {
-            echo "version=$version"
-            echo "stamp=$stamp"
-            echo "tag=v$version-$stamp"
-            echo "base=Rustfus-$version-$stamp-windows-x64"
-          } >> "$GITHUB_OUTPUT"
+          stamp=$(basename "$zip" | sed -E 's/^Rustfus-(.+)-windows-x64\.zip$/\1/')
+          echo "tag=$stamp" >> "$GITHUB_OUTPUT"
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
 
       # Re-running this job for the same CI run yields the same tag, so it must not fail or duplicate.
       - name: Skip if already released
@@ -58,37 +53,26 @@ jobs:
             echo "exists=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # Put the timestamp in the file names so downloads from different builds can be told apart.
-      # The ZIP itself is not modified; the checksum is verified before and rewritten after.
-      - name: Rename and re-check the assets
+      - name: Verify the checksum
         if: steps.released.outputs.exists != 'true'
         env:
-          BASE: ${{ steps.name.outputs.base }}
+          ZIP: ${{ steps.name.outputs.zip }}
         run: |
-          zip=$(ls dist/Rustfus-*-windows-x64.zip)
-          expected=$(cut -d' ' -f1 "$zip.sha256")
-          actual=$(sha256sum "$zip" | cut -d' ' -f1)
+          expected=$(cut -d' ' -f1 "$ZIP.sha256")
+          actual=$(sha256sum "$ZIP" | cut -d' ' -f1)
           if [ "$expected" != "$actual" ]; then
             echo "Checksum mismatch: sidecar $expected, archive $actual" >&2
             exit 1
           fi
-          rm "$zip.sha256"
-          mv "$zip" "dist/$BASE.zip"
-          echo "$actual  $BASE.zip" > "dist/$BASE.zip.sha256"
-          ls -l dist
 
       - name: Create the tag and the pre-release
         if: steps.released.outputs.exists != 'true'
         env:
           TAG: ${{ steps.name.outputs.tag }}
-          BASE: ${{ steps.name.outputs.base }}
-          VERSION: ${{ steps.name.outputs.version }}
-          STAMP: ${{ steps.name.outputs.stamp }}
+          ZIP: ${{ steps.name.outputs.zip }}
         run: |
-          gh release create "$TAG" \
-            "dist/$BASE.zip" \
-            "dist/$BASE.zip.sha256" \
+          gh release create "$TAG" "$ZIP" "$ZIP.sha256" \
             --target "$HEAD_SHA" \
             --prerelease \
             --generate-notes \
-            --title "Rustfus $VERSION ($STAMP UTC)"
+            --title "Rustfus $TAG UTC"
