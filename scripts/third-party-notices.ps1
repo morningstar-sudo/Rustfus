@@ -4,7 +4,7 @@ param(
     [string]$Target = "x86_64-pc-windows-msvc"
 )
 
-# Lists every third-party Rust crate linked into rustfus-worker.exe and rustfus_ffi.dll, with its
+# Lists every third-party Rust crate linked into rustfus_ffi.dll, with its
 # license expression and source, followed by the license files shipped inside each crate. Build-time
 # only crates (proc-macros and what they pull in) are not linked and are left out. Uses only
 # `cargo tree` and the local cargo registry, so no extra tool is needed.
@@ -15,7 +15,7 @@ $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USER
 $seen = @{}
 Push-Location $root
 try {
-    foreach ($crate in "rustfus-worker", "rustfus-ffi") {
+    foreach ($crate in @("rustfus-ffi")) {
         $lines = & cargo tree -p $crate --target $Target --locked --prefix none `
             -e "normal,no-proc-macro" --format "{p}|{l}|{r}"
         if ($LASTEXITCODE -ne 0) { throw "cargo tree failed for $crate" }

@@ -33,7 +33,10 @@ Before calling a build stable, record successful results for:
 - Keyboard navigation, screen-reader labels, and high-contrast mode.
 - Start-up on Windows 10 22H2 and Windows 11 machines that have no Visual C++ Redistributable and no Rust toolchain installed.
 
-Never run the physical-device matrix on media containing user data. `Rustfus.exe`, `rustfus_ffi.dll` and `rustfus-worker.exe` are self-signed by CI (`scripts/sign.ps1`), so Windows still shows an unverified publisher until the user trusts the certificate. For a certificate Windows trusts out of the box, switch to SignPath Foundation or a CA-issued certificate.
+Never run the physical-device matrix on media containing user data. `Rustfus.exe` and
+`rustfus_ffi.dll` are self-signed by CI (`scripts/sign.ps1`), so Windows still shows an unverified
+publisher until the user trusts the certificate. For a certificate Windows trusts out of the box,
+switch to SignPath Foundation or a CA-issued certificate.
 
 ## Code signing
 

@@ -57,7 +57,6 @@ internal static class RustfusNative
         int verify,
         [MarshalAs(UnmanagedType.LPWStr)] string automationJson,
         [MarshalAs(UnmanagedType.LPWStr)] string confirmation,
-        [MarshalAs(UnmanagedType.LPWStr)] string workerPath,
         out IntPtr session,
         out IntPtr json);
 
@@ -74,7 +73,7 @@ internal static class RustfusNative
 internal static class Bridge
 {
     public const int StatusClosed = -4;
-    private const int ExpectedAbi = 4;
+    private const int ExpectedAbi = 5;
 
     /// Loads rustfus_ffi.dll from the application directory only (never from PATH or the CWD).
     public static bool TryLoad(out string error)
@@ -189,15 +188,15 @@ internal static class Bridge
         return Str(Take(status, json), "hash");
     }
 
-    /// Launches the worker with the GUI's administrator token, prepares a plan and starts the
+    /// Starts the media-writing service inside the Rust DLL, prepares a plan and starts the
     /// operation. Blocks.
     public static BridgeSession StartSession(string deviceId, string imageId, string volumeLabel,
-        bool verify, string automationJson, string confirmation, string workerPath)
+        bool verify, string automationJson, string confirmation)
     {
         IntPtr handle;
         IntPtr json;
         int status = RustfusNative.rustfus_session_start(deviceId, imageId, volumeLabel,
-            verify ? 1 : 0, automationJson, confirmation, workerPath, out handle, out json);
+            verify ? 1 : 0, automationJson, confirmation, out handle, out json);
         Dictionary<string, object> plan = Take(status, json);
         return new BridgeSession(handle, plan);
     }
@@ -225,7 +224,7 @@ internal sealed class BridgeSession : IDisposable
         {
             if (closing || handle == IntPtr.Zero)
             {
-                throw new BridgeException(Bridge.StatusClosed, "io", "The worker session is closed");
+                throw new BridgeException(Bridge.StatusClosed, "io", "The media-writer session is closed");
             }
             active++;
             return handle;
@@ -241,7 +240,7 @@ internal sealed class BridgeSession : IDisposable
         }
     }
 
-    /// Blocks for the next event. A BridgeException with IsClosed means the worker has gone.
+    /// Blocks for the next event. A BridgeException with IsClosed means the service has stopped.
     public Dictionary<string, object> NextEvent()
     {
         IntPtr h = Enter();

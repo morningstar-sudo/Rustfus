@@ -18,7 +18,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub const ABI_VERSION: i32 = 4;
+pub const ABI_VERSION: i32 = 5;
 
 const OK: i32 = 0;
 const PANIC: i32 = -1;
@@ -80,7 +80,7 @@ unsafe fn run(out_json: *mut *mut c_char, body: impl FnOnce() -> Result<Value, F
             CLOSED,
             json::error(&OperationError::new(
                 ErrorCode::Io,
-                "The worker session is closed",
+                "The media-writer session is closed",
             )),
         ),
         Err(_) => (
@@ -247,7 +247,7 @@ pub unsafe extern "C" fn rustfus_analyze_image(
     }
 }
 
-/// Launches the elevated worker, prepares a plan and starts the operation. On success
+/// Starts the in-DLL media-writing service, prepares a plan and starts the operation. On success
 /// `*out_session` receives the handle and `out_json` the plan.
 ///
 /// # Safety
@@ -262,7 +262,6 @@ pub unsafe extern "C" fn rustfus_session_start(
     verify: i32,
     automation_json: *const u16,
     confirmation: *const u16,
-    worker_path: *const u16,
     out_session: *mut *mut c_void,
     out_json: *mut *mut c_char,
 ) -> i32 {
@@ -297,7 +296,6 @@ pub unsafe extern "C" fn rustfus_session_start(
                 )
             };
             let confirmation = wide_arg(confirmation, "confirmation")?;
-            let worker_path = PathBuf::from(wide_arg(worker_path, "worker_path")?);
             let (device, image) = {
                 let registry = registry::global();
                 (
@@ -309,16 +307,15 @@ pub unsafe extern "C" fn rustfus_session_start(
                         .ok_or(Failure::InvalidArgument("unknown image_id"))?,
                 )
             };
-            let (session, plan) =
-                platform::open_worker_session(&worker_path, |token| OpenRequest {
-                    token,
-                    device,
-                    image,
-                    volume_label,
-                    verify: verify != 0,
-                    automation,
-                    confirmation,
-                })?;
+            let (session, plan) = platform::open_worker_session(|token| OpenRequest {
+                token,
+                device,
+                image,
+                volume_label,
+                verify: verify != 0,
+                automation,
+                confirmation,
+            })?;
             *out_session = Arc::into_raw(Arc::new(session)).cast_mut().cast::<c_void>();
             Ok(json::plan(&plan))
         })
@@ -344,7 +341,7 @@ pub unsafe extern "C" fn rustfus_session_next_event(
     }
 }
 
-/// Asks the worker to cancel at its next safe boundary.
+/// Asks the media writer to cancel at its next safe boundary.
 ///
 /// # Safety
 ///
@@ -361,7 +358,7 @@ pub unsafe extern "C" fn rustfus_session_cancel(session: *mut c_void) -> i32 {
 }
 
 /// Sends `Shutdown` and releases the handle. The handle must not be used afterwards; a
-/// concurrent `rustfus_session_next_event` finishes with status `-4` once the worker exits.
+/// concurrent `rustfus_session_next_event` finishes with status `-4` once the service exits.
 ///
 /// # Safety
 ///
@@ -395,8 +392,8 @@ mod tests {
     }
 
     #[test]
-    fn abi_version_is_four() {
-        assert_eq!(rustfus_abi_version(), 4);
+    fn abi_version_is_five() {
+        assert_eq!(rustfus_abi_version(), 5);
     }
 
     #[test]
@@ -463,15 +460,10 @@ mod tests {
     }
 
     #[test]
-    fn unknown_ids_are_rejected_before_any_worker_is_launched() {
+    fn unknown_ids_are_rejected_before_any_service_is_started() {
         let id = CString::new("nope").unwrap();
         let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
-        let (label, unattend, confirmation, worker) = (
-            wide("RUSTFUS"),
-            wide(""),
-            wide("ERASE"),
-            wide("C:\\x\\rustfus-worker.exe"),
-        );
+        let (label, unattend, confirmation) = (wide("RUSTFUS"), wide(""), wide("ERASE"));
         let mut session: *mut c_void = std::ptr::null_mut();
         let mut out: *mut c_char = std::ptr::null_mut();
         // SAFETY: all pointers are valid for the duration of the call.
@@ -483,7 +475,6 @@ mod tests {
                 1,
                 unattend.as_ptr(),
                 confirmation.as_ptr(),
-                worker.as_ptr(),
                 &raw mut session,
                 &raw mut out,
             )

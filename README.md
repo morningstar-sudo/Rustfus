@@ -22,7 +22,9 @@ The destructive worker is deliberately fail-closed: an operation must be planned
 | `apps/rustfus-worker` | The elevated worker, started with UAC only when an operation begins. |
 | `crates/rustfus-core`, `-protocol`, `-image`, `-disk`, `-windows` | Shared types, IPC framing, image analysis, MBR/FAT32 layout, and the Windows storage layer. |
 
-The release is three files (`Rustfus.exe`, `rustfus_ffi.dll`, `rustfus-worker.exe`) plus license files: about 1 MB zipped. The front end needs .NET Framework 4.8, which is part of Windows 10 22H2 and Windows 11; the Rust parts link the C runtime statically.
+The release is two binaries (`Rustfus.exe` and `rustfus_ffi.dll`) plus license files. The media
+writer is linked into the DLL and runs on a background thread. The front end needs .NET Framework
+4.8, which is part of Windows 10 22H2 and Windows 11; the Rust DLL links the C runtime statically.
 
 ## Current implementation
 

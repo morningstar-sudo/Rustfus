@@ -4,7 +4,7 @@
 // in the executable.
 //
 // Command line:
-//   --self-test   load the Rust library, scan USB devices, check the worker is present, exit.
+//   --self-test   load the Rust library, scan USB devices and validate config dialogs, then exit.
 //   --demo        run with fake data. No disk is touched and nothing is written.
 //
 // C# 5 only: the compiler that ships with Windows (csc.exe) is the whole toolchain.
@@ -82,7 +82,6 @@ internal static class Program
     private const int ExitCoreLibraryMissing = 2;
     private const int ExitSelfTestLibrary = 10;
     private const int ExitSelfTestScan = 11;
-    private const int ExitSelfTestWorker = 12;
 
     private static Window win;
     private static bool dark;
@@ -557,10 +556,9 @@ internal static class Program
         string image = imageId;
         string label = volume.Text;
         bool verifyReadBack = verify.IsChecked == true;
-        // The user has just answered the Yes/No prompt above; the worker protocol still requires
-        // its confirmation phrase, which the worker checks again.
+        // The user has just answered the Yes/No prompt above; the service protocol still requires
+        // its confirmation phrase, which the Rust media writer checks again.
         const string confirmation = "ERASE";
-        string worker = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "rustfus-worker.exe");
         SessionLog.Write("Starting operation: device [" + SelectedDeviceText() + "], image [" +
                          imagePath.Text.Trim() + "], label [" + label + "], verify " + verifyReadBack +
                          ", installation automation " + (automationConfig.Length > 0));
@@ -568,29 +566,29 @@ internal static class Program
         lastLoggedBucket = -1;
         busy = true;
         progress.Value = 0;
-        status.Text = "Starting the worker, then re-verifying the ISO and USB device...";
-        SessionLog.Write("Launching worker with inherited administrator rights; it will re-verify the ISO and USB device before writing");
+        status.Text = "Starting the media writer, then re-verifying the ISO and USB device...";
+        SessionLog.Write("Starting the media writer inside rustfus_ffi.dll; it will re-verify the ISO and USB device before writing");
         UpdateControls();
         Thread thread = new Thread(delegate()
         {
-            RunOperation(deviceId, image, label, verifyReadBack, automationConfig, confirmation, worker);
+            RunOperation(deviceId, image, label, verifyReadBack, automationConfig, confirmation);
         });
         thread.IsBackground = true;
         thread.Start();
     }
 
     private static void RunOperation(string deviceId, string image, string label, bool verifyReadBack,
-        string automationConfig, string confirmation, string worker)
+        string automationConfig, string confirmation)
     {
         BridgeSession s = null;
         try
         {
             s = Bridge.StartSession(deviceId, image, label, verifyReadBack, automationConfig,
-                                    confirmation, worker);
+                                    confirmation);
             session = s;
-            SessionLog.Write("Worker accepted the plan: mode " + Bridge.Str(s.Plan, "mode") + ", " +
+            SessionLog.Write("Media writer accepted the plan: mode " + Bridge.Str(s.Plan, "mode") + ", " +
                              FormatSize(Bridge.Num(s.Plan, "bytes_to_write")) + " to write");
-            Ui(delegate { status.Text = "Worker connected; re-verifying the source image before writing..."; });
+            Ui(delegate { status.Text = "Media writer started; re-verifying the source image before writing..."; });
             while (true)
             {
                 Dictionary<string, object> ev = s.NextEvent();
@@ -773,12 +771,6 @@ internal static class Program
         {
             SessionLog.Write("Self-test failed: automation configuration dialogs: " + ex.Message);
             return ExitSelfTestLibrary;
-        }
-        string worker = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "rustfus-worker.exe");
-        if (!File.Exists(worker))
-        {
-            SessionLog.Write("Self-test failed: worker not found at " + worker);
-            return ExitSelfTestWorker;
         }
         SessionLog.Write("Self-test passed");
         return 0;

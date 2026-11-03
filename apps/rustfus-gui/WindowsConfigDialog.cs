@@ -21,7 +21,7 @@ internal sealed class WindowsConfigDialog : Window
     private readonly ComboBox inputLocale = LocaleChoices();
     private readonly ComboBox systemLocale = LocaleChoices();
     private readonly ComboBox userLocale = LocaleChoices();
-    private readonly ComboBox timeZone = new ComboBox { Height = 32, MaxDropDownHeight = 260 };
+    private readonly ComboBox timeZone = new ComboBox { MinHeight = 36, MaxDropDownHeight = 260 };
     private readonly TextBox computerName = Box("");
     private readonly TextBox registeredOwner = Box(Environment.UserName);
     private readonly TextBox registeredOrganization = Box("");
@@ -35,7 +35,12 @@ internal sealed class WindowsConfigDialog : Window
         "Administrators;Users",
         "Users",
         "Remote Desktop Users;Users");
-    private readonly PasswordBox accountPassword = new PasswordBox { Height = 32, Padding = new Thickness(7, 5, 7, 5) };
+    private readonly PasswordBox accountPassword = new PasswordBox
+    {
+        MinHeight = 36,
+        Padding = new Thickness(8, 4, 8, 4),
+        VerticalContentAlignment = VerticalAlignment.Center
+    };
     private readonly CheckBox autoLogon = Check("Sign in to this account automatically", false);
     private readonly ComboBox autoLogonCount = NumberChoices(1, 20);
     private readonly CheckBox hideEula = Check("Hide the Windows license page", true);
@@ -114,9 +119,9 @@ internal sealed class WindowsConfigDialog : Window
         buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        Button generate = new Button { Content = "Generate / refresh XML", MinWidth = 180, Height = 34, Margin = new Thickness(0, 0, 8, 0) };
-        Button cancel = new Button { Content = "Cancel", Width = 100, Height = 34, Margin = new Thickness(0, 0, 8, 0), IsCancel = true };
-        Button use = new Button { Content = "Use this config", Width = 140, Height = 34, IsDefault = true };
+        Button generate = new Button { Content = "Generate / refresh XML", MinWidth = 180, MinHeight = 36, Margin = new Thickness(0, 0, 8, 0) };
+        Button cancel = new Button { Content = "Cancel", Width = 100, MinHeight = 36, Margin = new Thickness(0, 0, 8, 0), IsCancel = true };
+        Button use = new Button { Content = "Use this config", Width = 140, MinHeight = 36, IsDefault = true };
         use.SetResourceReference(StyleProperty, "Primary");
         generate.Click += delegate { GenerateXml(); tabs.SelectedIndex = 4; };
         use.Click += delegate { Accept(); };
@@ -822,7 +827,7 @@ internal sealed class WindowsConfigDialog : Window
 
     private static ComboBox LocaleChoices()
     {
-        ComboBox box = new ComboBox { Height = 32, MaxDropDownHeight = 260 };
+        ComboBox box = new ComboBox { MinHeight = 36, MaxDropDownHeight = 260 };
         string current = CurrentLocale();
         List<CultureInfo> cultures = new List<CultureInfo>();
         foreach (CultureInfo culture in CultureInfo.GetCultures(CultureTypes.SpecificCultures))
@@ -860,7 +865,16 @@ internal sealed class WindowsConfigDialog : Window
     }
 
     private static StackPanel Form() { return new StackPanel { Margin = new Thickness(8) }; }
-    private static TextBox Box(string text) { return new TextBox { Text = text, Height = 32, Padding = new Thickness(7, 5, 7, 5) }; }
+    private static TextBox Box(string text)
+    {
+        return new TextBox
+        {
+            Text = text,
+            MinHeight = 36,
+            Padding = new Thickness(8, 4, 8, 4),
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+    }
     private static TextBox Multi(string text)
     {
         return new TextBox
@@ -880,14 +894,14 @@ internal sealed class WindowsConfigDialog : Window
     }
     private static ComboBox Choices(params string[] values)
     {
-        ComboBox box = new ComboBox { Height = 32 };
+        ComboBox box = new ComboBox { MinHeight = 36 };
         foreach (string value in values) { box.Items.Add(value); }
         box.SelectedIndex = 0;
         return box;
     }
     private static ComboBox NumberChoices(int first, int last)
     {
-        ComboBox box = new ComboBox { Height = 32, MaxDropDownHeight = 260 };
+        ComboBox box = new ComboBox { MinHeight = 36, MaxDropDownHeight = 260 };
         for (int value = first; value <= last; value++)
         {
             box.Items.Add(value.ToString(CultureInfo.InvariantCulture));

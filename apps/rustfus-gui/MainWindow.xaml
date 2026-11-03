@@ -71,11 +71,14 @@
       <Setter Property='CaretBrush' Value='{DynamicResource Text}'/>
       <Setter Property='Background' Value='{DynamicResource Input}'/>
       <Setter Property='BorderBrush' Value='{DynamicResource Border}'/>
+      <Setter Property='MinHeight' Value='36'/>
+      <Setter Property='Padding' Value='8,4'/>
+      <Setter Property='VerticalContentAlignment' Value='Center'/>
       <Setter Property='Template'>
         <Setter.Value>
           <ControlTemplate TargetType='TextBox'>
             <Border x:Name='bd' Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}'
-                    BorderThickness='1' CornerRadius='6' Padding='8,6'>
+                    BorderThickness='1' CornerRadius='6' Padding='{TemplateBinding Padding}'>
               <ScrollViewer x:Name='PART_ContentHost'/>
             </Border>
             <ControlTemplate.Triggers>
@@ -91,11 +94,14 @@
       <Setter Property='CaretBrush' Value='{DynamicResource Text}'/>
       <Setter Property='Background' Value='{DynamicResource Input}'/>
       <Setter Property='BorderBrush' Value='{DynamicResource Border}'/>
+      <Setter Property='MinHeight' Value='36'/>
+      <Setter Property='Padding' Value='8,4'/>
+      <Setter Property='VerticalContentAlignment' Value='Center'/>
       <Setter Property='Template'>
         <Setter.Value>
           <ControlTemplate TargetType='PasswordBox'>
             <Border x:Name='bd' Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}'
-                    BorderThickness='1' CornerRadius='6' Padding='8,6'>
+                    BorderThickness='1' CornerRadius='6' Padding='{TemplateBinding Padding}'>
               <ScrollViewer x:Name='PART_ContentHost'/>
             </Border>
             <ControlTemplate.Triggers>
@@ -190,6 +196,7 @@
     </Style>
     <Style TargetType='ComboBox'>
       <Setter Property='Foreground' Value='{DynamicResource Text}'/>
+      <Setter Property='MinHeight' Value='36'/>
       <Setter Property='Template'>
         <Setter.Value>
           <ControlTemplate TargetType='ComboBox'>

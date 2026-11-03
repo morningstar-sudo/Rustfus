@@ -54,9 +54,6 @@ const WORKER_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const TOKEN_QUERY: u32 = 0x0008;
 const TOKEN_USER: u32 = 1;
 const SDDL_REVISION_1: u32 = 1;
-const SEE_MASK_NOCLOSEPROCESS: u32 = 0x0000_0040;
-const SEE_MASK_NOASYNC: u32 = 0x0000_0100;
-const SW_HIDE: i32 = 0;
 const ERROR_FILE_NOT_FOUND: i32 = 2;
 const ERROR_INVALID_FUNCTION: i32 = 1;
 const ERROR_NOT_SUPPORTED: i32 = 50;
@@ -121,25 +118,6 @@ struct SecurityAttributes {
     length: u32,
     security_descriptor: *mut c_void,
     inherit_handle: Bool,
-}
-
-#[repr(C)]
-struct ShellExecuteInfo {
-    size: u32,
-    mask: u32,
-    window: Handle,
-    verb: *const u16,
-    file: *const u16,
-    parameters: *const u16,
-    directory: *const u16,
-    show: i32,
-    instance: Handle,
-    id_list: *mut c_void,
-    class: *const u16,
-    class_key: Handle,
-    hot_key: u32,
-    icon_or_monitor: Handle,
-    process: Handle,
 }
 
 #[repr(C)]
@@ -216,7 +194,6 @@ unsafe extern "system" {
         collection_data_timeout: *mut u32,
     ) -> Bool;
     fn WaitNamedPipeW(name: *const u16, timeout: u32) -> Bool;
-    fn GetProcessId(process: Handle) -> u32;
     fn IsNativeVhdBoot(is_native_vhd_boot: *mut Bool) -> Bool;
 }
 
@@ -256,11 +233,6 @@ unsafe extern "system" {
         data: *mut c_void,
         data_size: *mut u32,
     ) -> i32;
-}
-
-#[link(name = "shell32")]
-unsafe extern "system" {
-    fn ShellExecuteExW(info: *mut ShellExecuteInfo) -> Bool;
 }
 
 #[link(name = "setupapi")]
@@ -600,7 +572,7 @@ impl NamedPipeServer {
             if started.elapsed() >= WORKER_CONNECT_TIMEOUT {
                 return Err(OperationError::new(
                     ErrorCode::Io,
-                    "The elevated worker did not connect within 30 seconds",
+                    "The media-writing service did not connect within 30 seconds",
                 ));
             }
             thread::sleep(Duration::from_millis(50));
@@ -627,7 +599,7 @@ impl NamedPipeServer {
         if client_process_id != expected_process_id {
             return Err(OperationError::new(
                 ErrorCode::AccessDenied,
-                "The named-pipe client is not the elevated worker process",
+                "The named-pipe client is not the current Rustfus process",
             ));
         }
         Ok(file)
@@ -647,54 +619,6 @@ pub fn connect_named_pipe(name: &str) -> Result<File, OperationError> {
         return Err(io_error(io::Error::last_os_error()));
     }
     open_handle_with_share(name, GENERIC_READ | GENERIC_WRITE, 0).map_err(io_error)
-}
-
-pub fn launch_worker(
-    worker_path: &Path,
-    pipe_name: &str,
-    token: &str,
-) -> Result<u32, OperationError> {
-    let worker = wide_null(worker_path.to_str().ok_or_else(|| {
-        OperationError::new(ErrorCode::Internal, "Worker path is not valid Unicode")
-    })?);
-    // Rustfus.exe requests requireAdministrator in its manifest. Use the normal executable verb
-    // so the worker inherits that token without presenting a second elevation prompt.
-    let verb = wide_null("open");
-    let parameters = wide_null(&format!(
-        "--pipe {} --token {}",
-        quote_argument(pipe_name),
-        quote_argument(token)
-    ));
-    let mut info = ShellExecuteInfo {
-        size: mem::size_of::<ShellExecuteInfo>() as u32,
-        mask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
-        window: ptr::null_mut(),
-        verb: verb.as_ptr(),
-        file: worker.as_ptr(),
-        parameters: parameters.as_ptr(),
-        directory: ptr::null(),
-        show: SW_HIDE,
-        instance: ptr::null_mut(),
-        id_list: ptr::null_mut(),
-        class: ptr::null(),
-        class_key: ptr::null_mut(),
-        hot_key: 0,
-        icon_or_monitor: ptr::null_mut(),
-        process: ptr::null_mut(),
-    };
-    let success = unsafe { ShellExecuteExW(&mut info) };
-    if success == 0 || info.process.is_null() {
-        return Err(io_error(io::Error::last_os_error()));
-    }
-    let process_id = unsafe { GetProcessId(info.process) };
-    unsafe {
-        CloseHandle(info.process);
-    }
-    if process_id == 0 {
-        Err(io_error(io::Error::last_os_error()))
-    } else {
-        Ok(process_id)
-    }
 }
 
 pub fn enumerate_usb_devices() -> Result<Vec<DeviceSnapshot>, OperationError> {
@@ -1673,10 +1597,6 @@ fn current_user_pipe_security_descriptor() -> Result<LocalMemory, OperationError
         return Err(io_error(io::Error::last_os_error()));
     }
     Ok(LocalMemory(descriptor))
-}
-
-fn quote_argument(argument: &str) -> String {
-    format!("\"{}\"", argument.replace('"', "\\\""))
 }
 
 unsafe fn wide_ptr_to_string(pointer: *const u16) -> String {

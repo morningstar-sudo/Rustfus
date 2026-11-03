@@ -5,22 +5,13 @@ use rustfus_core::{
 use rustfus_protocol::{Envelope, WorkerRequest, WorkerResponse, read_frame, write_frame};
 use rustfus_windows::{CancellationToken, StreamProgress};
 use std::collections::HashMap;
-use std::io::{self, BufReader, Read, Write};
+#[cfg(windows)]
+use std::io::BufReader;
+use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
-
-#[cfg(not(windows))]
-pub fn run_stdio() -> Result<(), Box<dyn std::error::Error>> {
-    // Stdio keeps the request loop testable in WSL. The desktop front end connects the same
-    // protocol to an authenticated named pipe in production.
-    let stdin = io::stdin();
-    let mut reader = BufReader::new(stdin.lock());
-    let writer: SharedWriter = Arc::new(Mutex::new(Box::new(io::stdout())));
-    let expected_token = std::env::var("RUSTFUS_WORKER_TOKEN").ok();
-    run_transport(&mut reader, writer, expected_token)
-}
 
 #[cfg(windows)]
 pub fn run_pipe(

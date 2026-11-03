@@ -12,7 +12,12 @@ internal sealed class UbuntuConfigDialog : Window
     private readonly TextBox realName = Box(Environment.UserName);
     private readonly TextBox username = Box(SafeUserName());
     private readonly TextBox hostname = Box("ubuntu");
-    private readonly PasswordBox password = new PasswordBox { Height = 32, Padding = new Thickness(7, 5, 7, 5) };
+    private readonly PasswordBox password = new PasswordBox
+    {
+        MinHeight = 36,
+        Padding = new Thickness(8, 4, 8, 4),
+        VerticalContentAlignment = VerticalAlignment.Center
+    };
     private readonly TextBox groups = Box("adm,sudo");
     private readonly TextBox locale = Box("en_US.UTF-8");
     private readonly TextBox timezone = Box("Etc/UTC");
@@ -104,9 +109,9 @@ internal sealed class UbuntuConfigDialog : Window
         buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        Button generate = new Button { Content = "Generate / refresh YAML", MinWidth = 180, Height = 34, Margin = new Thickness(0, 0, 8, 0) };
-        Button cancel = new Button { Content = "Cancel", Width = 100, Height = 34, Margin = new Thickness(0, 0, 8, 0), IsCancel = true };
-        Button use = new Button { Content = "Use this config", Width = 140, Height = 34, IsDefault = true };
+        Button generate = new Button { Content = "Generate / refresh YAML", MinWidth = 180, MinHeight = 36, Margin = new Thickness(0, 0, 8, 0) };
+        Button cancel = new Button { Content = "Cancel", Width = 100, MinHeight = 36, Margin = new Thickness(0, 0, 8, 0), IsCancel = true };
+        Button use = new Button { Content = "Use this config", Width = 140, MinHeight = 36, IsDefault = true };
         use.SetResourceReference(StyleProperty, "Primary");
         generate.Click += delegate { GenerateYaml(); tabs.SelectedIndex = 5; };
         use.Click += delegate { Accept(); };
@@ -492,7 +497,16 @@ internal sealed class UbuntuConfigDialog : Window
     }
 
     private static StackPanel Form() { return new StackPanel { Margin = new Thickness(8) }; }
-    private static TextBox Box(string text) { return new TextBox { Text = text, Height = 32, Padding = new Thickness(7, 5, 7, 5) }; }
+    private static TextBox Box(string text)
+    {
+        return new TextBox
+        {
+            Text = text,
+            MinHeight = 36,
+            Padding = new Thickness(8, 4, 8, 4),
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+    }
     private static TextBox Multi(string text)
     {
         return new TextBox
@@ -512,7 +526,7 @@ internal sealed class UbuntuConfigDialog : Window
     }
     private static ComboBox Choices(params string[] values)
     {
-        ComboBox box = new ComboBox { Height = 32 };
+        ComboBox box = new ComboBox { MinHeight = 36 };
         foreach (string value in values) { box.Items.Add(value); }
         box.SelectedIndex = 0;
         return box;

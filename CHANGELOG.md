@@ -9,8 +9,10 @@ All notable changes to Rustfus are documented here.
 - Ubuntu zero-touch autoinstall for recognized x86_64 Ubuntu ISOs. A full multi-tab GUI covers every current Subiquity section, hashes account passwords locally as salted SHA-512 crypt, provides structured YAML editors for open-schema options, and keeps the complete generated YAML editable; importing existing `user-data` and optional `meta-data` remains available. The worker creates a `NoCloud` seed, patches GRUB/ISOLINUX boot arguments, refreshes affected `md5sum.txt` entries, flushes the FAT32 volume, and includes every generated file in optional read-back verification. Automated Ubuntu media boots via UEFI; disabling automation preserves the original ISO through the raw-write path.
 - A native Windows unattended-setup editor with tabs for regional settings, machine identity, accounts and OOBE, product key, compatibility overrides, optional UEFI/GPT disk automation, privacy/system policies, commands, and a read-only XML preview. Finite option sets use non-editable lists and free-form values are validated. It generates and validates `autounattend.xml` entirely inside Rustfus, writes it at the USB root, and includes it in durable read-back verification.
 - A WPF front end (C#, .NET Framework 4.8 as shipped with Windows 10 22H2 and Windows 11, compiled with the C# compiler that ships with Windows) with Mica and dark mode, ISO drag and drop, a Yes/No erase confirmation whose default answer is No, a per-session log under `%LOCALAPPDATA%\Rustfus\logs` with log export, and `--self-test` / `--demo` switches.
-- `rustfus_ffi.dll`: the C ABI between the front end and the Rust core (USB discovery, image analysis, and the authenticated session with the elevated worker).
-- An ephemeral elevated worker, authenticated and versioned named-pipe IPC with plan revalidation, and cancellation honoured at safe boundaries.
+- `rustfus_ffi.dll`: the C ABI between the front end and the Rust core, including USB discovery,
+  image analysis, and the background media-writing service.
+- An authenticated and versioned in-process service session with plan revalidation and cancellation
+  honoured at safe boundaries.
 - USB-only discovery using SetupAPI and native Win32 boot/system-disk detection (no WMI); discovery stops when the system disks cannot be identified or Windows runs from a native-boot VHD.
 - Raw write of x86_64 hybrid Linux ISO images with full read-back verification.
 - Windows installer media creation using MBR, FAT32, trusted `bootsect.exe`, and WIMGAPI splitting.
@@ -18,8 +20,8 @@ All notable changes to Rustfus are documented here.
 
 ### Changed
 
-- Rustfus now requests administrator rights when the front end starts. The isolated worker inherits
-  that token, so starting an operation no longer triggers a second elevation request.
+- Rustfus now requests administrator rights when the front end starts. The media-writing service is
+  linked into `rustfus_ffi.dll`, so releases no longer ship or launch `rustfus-worker.exe`.
 - Release ZIPs no longer include repository Markdown files; legal notices remain as `LICENSE` and `THIRD-PARTY-NOTICES.txt`.
 - The C runtime is linked statically, so the package runs on machines without the Visual C++ Redistributable.
 - Image analysis is multi-core: the image fingerprint is a SHA-256 tree hash over 4 MiB chunks (so it is no longer the plain SHA-256 of the ISO), and hybrid images are read once for both the fingerprint and the EFI boot-loader check. Analysing a 4 GB hybrid ISO went from about 9 s to about 1.4 s.

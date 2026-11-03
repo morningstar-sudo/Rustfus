@@ -1,57 +1,42 @@
-//! Connects a [`Session`] to a freshly launched `rustfus-worker` over a private named pipe. The
-//! administrator front end launches the worker with its inherited token; only the platform
-//! plumbing lives here, while the conversation is in `session.rs`.
+//! Connects a [`Session`] to the media-writing service linked into this DLL. The service runs on a
+//! background thread and retains the authenticated protocol boundary without launching a second
+//! process.
 
 use crate::session::{OpenRequest, PROGRESS_INTERVAL, Session};
 use rustfus_core::{ErrorCode, OperationError, OperationPlan};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
-use std::path::Path;
 
 pub type PipeSession = Session<BufReader<File>, BufWriter<File>>;
 
-const WORKER_FILE_NAME: &str = "rustfus-worker.exe";
-
-fn validate_worker_path(worker_path: &Path) -> Result<(), OperationError> {
-    let is_worker = worker_path.is_absolute()
-        && worker_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case(WORKER_FILE_NAME));
-    if !is_worker {
-        return Err(OperationError::new(
-            ErrorCode::Internal,
-            "The worker path must be the absolute path of rustfus-worker.exe",
-        ));
-    }
-    if !worker_path.is_file() {
-        return Err(OperationError::new(
-            ErrorCode::Internal,
-            "rustfus-worker.exe was not found next to the application",
-        ));
-    }
-    Ok(())
-}
-
-/// Starts the worker with the front end's inherited administrator token, accepts its pipe
-/// connection and runs the handshake.
+/// Starts the in-DLL service thread, accepts its private pipe connection and runs the handshake.
 ///
 /// # Errors
 ///
 /// Returns the failure reported by the platform layer or by the worker.
 #[cfg(windows)]
 pub fn open_worker_session(
-    worker_path: &Path,
     request: impl FnOnce(String) -> OpenRequest,
 ) -> Result<(PipeSession, OperationPlan), OperationError> {
     use uuid::Uuid;
 
-    validate_worker_path(worker_path)?;
     let pipe_name = format!(r"\\.\pipe\rustfus-{}", Uuid::new_v4());
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let server = rustfus_windows::NamedPipeServer::create(&pipe_name)?;
-    let process_id = rustfus_windows::launch_worker(worker_path, &pipe_name, &token)?;
-    let pipe = server.accept(process_id)?;
+    let service_pipe = pipe_name.clone();
+    let service_token = token.clone();
+    std::thread::Builder::new()
+        .name("rustfus-media-writer".to_owned())
+        .spawn(move || {
+            let result = rustfus_windows::connect_named_pipe(&service_pipe)
+                .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+                .and_then(|pipe| rustfus_worker::run_pipe(pipe, service_token));
+            if let Err(error) = result {
+                eprintln!("Rustfus media writer stopped: {error}");
+            }
+        })
+        .map_err(|error| OperationError::new(ErrorCode::Io, error.to_string()))?;
+    let pipe = server.accept(std::process::id())?;
     let read_pipe = pipe
         .try_clone()
         .map_err(|error| OperationError::new(ErrorCode::Io, error.to_string()))?;
@@ -68,26 +53,11 @@ pub fn open_worker_session(
 /// Always `UnsupportedPlatform` outside Windows.
 #[cfg(not(windows))]
 pub fn open_worker_session(
-    worker_path: &Path,
     _request: impl FnOnce(String) -> OpenRequest,
 ) -> Result<(PipeSession, OperationPlan), OperationError> {
-    validate_worker_path(worker_path)?;
     let _ = PROGRESS_INTERVAL;
     Err(OperationError::new(
         ErrorCode::UnsupportedPlatform,
         "Worker sessions are available only on Windows",
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn relative_or_foreign_worker_paths_are_rejected() {
-        for path in ["rustfus-worker.exe", "/tmp/evil.exe", "C:/x/cmd.exe"] {
-            let error = validate_worker_path(Path::new(path)).unwrap_err();
-            assert_eq!(error.code, ErrorCode::Internal, "{path}");
-        }
-    }
 }

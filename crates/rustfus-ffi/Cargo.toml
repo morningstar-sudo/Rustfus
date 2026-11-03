@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 rustfus-core = { version = "0.1.0", path = "../rustfus-core" }
 rustfus-protocol = { version = "0.1.0", path = "../rustfus-protocol" }
 rustfus-windows = { version = "0.1.0", path = "../rustfus-windows" }
+rustfus-worker = { version = "0.1.0", path = "../../apps/rustfus-worker" }
 serde_json.workspace = true
 sha-crypt.workspace = true
 uuid.workspace = true

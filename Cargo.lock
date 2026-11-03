@@ -288,6 +288,7 @@ dependencies = [
  "rustfus-core",
  "rustfus-protocol",
  "rustfus-windows",
+ "rustfus-worker",
  "serde_json",
  "sha-crypt",
  "uuid",

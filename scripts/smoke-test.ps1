@@ -19,10 +19,13 @@ try {
 
     Expand-Archive -LiteralPath $Archive -DestinationPath $work
     $app = @(Get-ChildItem -LiteralPath $work -Directory)[0].FullName
-    $required = "Rustfus.exe", "rustfus_ffi.dll", "rustfus-worker.exe", "LICENSE",
+    $required = "Rustfus.exe", "rustfus_ffi.dll", "LICENSE",
         "THIRD-PARTY-NOTICES.txt"
     foreach ($name in $required) {
         if (-not (Test-Path -LiteralPath (Join-Path $app $name))) { throw "The package is missing $name" }
+    }
+    if (Test-Path -LiteralPath (Join-Path $app "rustfus-worker.exe")) {
+        throw "The legacy rustfus-worker.exe must not be included in the package"
     }
     $markdown = @(Get-ChildItem -LiteralPath $app -Recurse -File -Filter "*.md")
     if ($markdown.Count -ne 0) {
@@ -31,7 +34,7 @@ try {
     Write-Host "package contents ok"
 
     # Without the static CRT the app fails on machines that lack the Visual C++ Redistributable.
-    foreach ($name in "rustfus_ffi.dll", "rustfus-worker.exe") {
+    foreach ($name in @("rustfus_ffi.dll")) {
         $bytes = [IO.File]::ReadAllBytes((Join-Path $app $name))
         $text = [Text.Encoding]::ASCII.GetString($bytes).ToLowerInvariant()
         foreach ($forbidden in "vcruntime140", "api-ms-win-crt") {
@@ -42,7 +45,7 @@ try {
 
     $self = Start-Process -FilePath (Join-Path $app "Rustfus.exe") -ArgumentList "--self-test" -Wait -PassThru
     if ($self.ExitCode -ne 0) {
-        throw "Rustfus.exe --self-test failed with exit code $($self.ExitCode) (10 library, 11 USB scan, 12 worker missing)"
+        throw "Rustfus.exe --self-test failed with exit code $($self.ExitCode) (10 library, 11 USB scan)"
     }
     Write-Host "self-test ok"
 
