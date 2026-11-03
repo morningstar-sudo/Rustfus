@@ -6,7 +6,8 @@ param(
 )
 
 # Assembles the portable release: Rustfus.exe (WPF front end), rustfus_ffi.dll (Rust core) and
-# rustfus-worker.exe (elevated writer), plus license files, as a ZIP with a SHA-256 sidecar.
+# rustfus-worker.exe (elevated writer), plus non-Markdown license notices, as a ZIP with a SHA-256
+# sidecar. Repository Markdown files are intentionally not shipped.
 # Signs the three binaries first (scripts/sign.ps1).
 # Run after `cargo build --release --locked --target <Target> -p rustfus-ffi -p rustfus-worker`.
 $ErrorActionPreference = "Stop"
@@ -49,11 +50,14 @@ New-Item -ItemType Directory -Path $package | Out-Null
 Copy-Item -LiteralPath $gui -Destination $package
 Copy-Item -LiteralPath $core -Destination $package
 Copy-Item -LiteralPath $worker -Destination $package
-foreach ($document in "LICENSE", "README.md", "CHANGELOG.md", "SECURITY.md") {
-    Copy-Item -LiteralPath (Join-Path $root $document) -Destination $package
-}
+Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination $package
 & (Join-Path $PSScriptRoot "third-party-notices.ps1") `
     -Output (Join-Path $package "THIRD-PARTY-NOTICES.txt") -Target $Target
+
+$markdown = @(Get-ChildItem -LiteralPath $package -Recurse -File -Filter "*.md")
+if ($markdown.Count -ne 0) {
+    throw "Markdown files must not be included in the release package: $($markdown.FullName -join ', ')"
+}
 
 Compress-Archive -LiteralPath $package -DestinationPath $archive -CompressionLevel Optimal
 $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()

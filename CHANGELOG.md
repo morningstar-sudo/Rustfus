@@ -18,6 +18,7 @@ All notable changes to Rustfus are documented here.
 
 ### Changed
 
+- Release ZIPs no longer include repository Markdown files; legal notices remain as `LICENSE` and `THIRD-PARTY-NOTICES.txt`.
 - The C runtime is linked statically, so the package runs on machines without the Visual C++ Redistributable.
 - Image analysis is multi-core: the image fingerprint is a SHA-256 tree hash over 4 MiB chunks (so it is no longer the plain SHA-256 of the ISO), and hybrid images are read once for both the fingerprint and the EFI boot-loader check. Analysing a 4 GB hybrid ISO went from about 9 s to about 1.4 s.
 - Raw image writes overlap reading and hashing the source with writing the target, and hashing with reading during read-back verification (a bounded two-thread pipeline; blocks, progress and errors stay in image order). Measured against throttled targets: about 5% faster at 100 MB/s, 18% at 400 MB/s and 42% at 1500 MB/s.

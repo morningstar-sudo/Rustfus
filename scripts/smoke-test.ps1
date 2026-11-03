@@ -19,10 +19,14 @@ try {
 
     Expand-Archive -LiteralPath $Archive -DestinationPath $work
     $app = @(Get-ChildItem -LiteralPath $work -Directory)[0].FullName
-    $required = "Rustfus.exe", "rustfus_ffi.dll", "rustfus-worker.exe", "LICENSE", "README.md",
-        "CHANGELOG.md", "SECURITY.md", "THIRD-PARTY-NOTICES.txt"
+    $required = "Rustfus.exe", "rustfus_ffi.dll", "rustfus-worker.exe", "LICENSE",
+        "THIRD-PARTY-NOTICES.txt"
     foreach ($name in $required) {
         if (-not (Test-Path -LiteralPath (Join-Path $app $name))) { throw "The package is missing $name" }
+    }
+    $markdown = @(Get-ChildItem -LiteralPath $app -Recurse -File -Filter "*.md")
+    if ($markdown.Count -ne 0) {
+        throw "The package contains Markdown files: $($markdown.FullName -join ', ')"
     }
     Write-Host "package contents ok"
 
