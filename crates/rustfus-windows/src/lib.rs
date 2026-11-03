@@ -395,7 +395,10 @@ mod platform;
 mod system_disks;
 
 #[cfg(windows)]
-pub use media::{analyze_image, cleanup_stale_temporary_directories, create_windows_installer};
+pub use media::{
+    analyze_image, cleanup_stale_temporary_directories, create_ubuntu_installer,
+    create_windows_installer,
+};
 #[cfg(windows)]
 pub use platform::{
     NamedPipeServer, connect_named_pipe, enumerate_usb_devices, flush_volume,

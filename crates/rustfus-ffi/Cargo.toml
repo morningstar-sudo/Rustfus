@@ -13,6 +13,7 @@ rustfus-core = { version = "0.1.0", path = "../rustfus-core" }
 rustfus-protocol = { version = "0.1.0", path = "../rustfus-protocol" }
 rustfus-windows = { version = "0.1.0", path = "../rustfus-windows" }
 serde_json.workspace = true
+sha-crypt.workspace = true
 uuid.workspace = true
 
 [lints]

@@ -1,15 +1,17 @@
 //! Versioned, length-delimited messages for the UI/worker privilege boundary.
 
 use rustfus_core::{
-    DeviceSnapshot, Fingerprint, ImageAnalysis, OperationError, OperationEvent, OperationPlan,
-    PROTOCOL_VERSION,
+    DeviceSnapshot, Fingerprint, ImageAnalysis, InstallAutomation, OperationError, OperationEvent,
+    OperationPlan, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
+/// Full Schneegans configurations may embed scripts and other resources in XML. Keep a strict
+/// allocation bound while allowing the 2 MiB imported-file limit plus JSON/UTF-8 escaping.
+pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope<T> {
@@ -44,6 +46,7 @@ pub enum WorkerRequest {
         image: ImageAnalysis,
         volume_label: String,
         verify: bool,
+        automation: Option<Box<InstallAutomation>>,
     },
     Start {
         plan_id: Uuid,
@@ -130,6 +133,7 @@ pub fn read_frame<R: Read + ?Sized, T: for<'de> Deserialize<'de>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustfus_core::{Architecture, ImageKind, UbuntuAutoinstallConfig};
 
     #[test]
     fn message_round_trip_is_length_delimited() {
@@ -172,5 +176,36 @@ mod tests {
             read_frame::<_, WorkerRequest>(&mut bytes.as_slice()),
             Err(ProtocolError::VersionMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn ubuntu_automation_round_trips_with_an_explicit_platform_tag() {
+        let request = WorkerRequest::Prepare {
+            device_fingerprint: Fingerprint([1; 32]),
+            image: ImageAnalysis {
+                path: "ubuntu.iso".into(),
+                kind: ImageKind::UbuntuInstaller,
+                architecture: Architecture::X86_64,
+                size_bytes: 1024,
+                fingerprint: Fingerprint([2; 32]),
+                required_bytes: 2048,
+                temporary_bytes: 0,
+                warnings: Vec::new(),
+            },
+            volume_label: "RUSTFUS".into(),
+            verify: true,
+            automation: Some(Box::new(InstallAutomation::Ubuntu(
+                UbuntuAutoinstallConfig {
+                    user_data: "#cloud-config\nautoinstall:\n  version: 1\n".into(),
+                    meta_data: String::new(),
+                },
+            ))),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""platform":"ubuntu""#));
+        assert_eq!(
+            serde_json::from_str::<WorkerRequest>(&json).unwrap(),
+            request
+        );
     }
 }

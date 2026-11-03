@@ -201,6 +201,13 @@ pub struct WindowsMediaManifest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UbuntuMediaManifest {
+    pub analysis: ImageAnalysis,
+    pub root: PathBuf,
+    pub files: Vec<MediaFile>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InstallImage {
     Wim { path: PathBuf, split_required: bool },
     Esd { path: PathBuf },
@@ -326,6 +333,91 @@ pub fn analyze_mounted_windows_iso(
         root: canonical_root,
         bootsect_path,
         install_image,
+        files,
+    })
+}
+
+pub fn analyze_mounted_ubuntu_iso(
+    iso_path: &Path,
+    mounted_root: &Path,
+) -> Result<UbuntuMediaManifest, OperationError> {
+    let info_path = required_child(mounted_root, &[".disk", "info"])?;
+    let bootx64 = required_child(mounted_root, &["efi", "boot", "bootx64.efi"])?;
+    let kernel = required_child(mounted_root, &["casper", "vmlinuz"])?;
+    let grub = required_child(mounted_root, &["boot", "grub", "grub.cfg"])?;
+    for path in [&info_path, &bootx64, &kernel, &grub] {
+        if !path.is_file() {
+            return Err(invalid_image(
+                "A required Ubuntu installation file is not a regular file",
+            ));
+        }
+    }
+    let info = fs::read_to_string(&info_path).map_err(io_error)?;
+    if !info.to_ascii_lowercase().contains("ubuntu") {
+        return Err(invalid_image(
+            "The mounted image does not identify itself as Ubuntu installation media",
+        ));
+    }
+
+    let canonical_root = mounted_root.canonicalize().map_err(io_error)?;
+    let mut files = Vec::new();
+    let mut required_bytes = 0_u64;
+    let mut oversized_file = None;
+    for entry in WalkDir::new(&canonical_root).follow_links(false) {
+        let entry = entry.map_err(|error| {
+            OperationError::new(ErrorCode::Io, format!("Could not enumerate ISO: {error}"))
+        })?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let metadata = entry.metadata().map_err(|error| {
+            OperationError::new(
+                ErrorCode::Io,
+                format!("Could not inspect ISO file: {error}"),
+            )
+        })?;
+        let relative_path = entry
+            .path()
+            .strip_prefix(&canonical_root)
+            .map_err(|_| invalid_image("A mounted ISO path escaped its root"))?
+            .to_path_buf();
+        if metadata.len() > FAT32_MAX_FILE_BYTES {
+            oversized_file.get_or_insert_with(|| relative_path.clone());
+        }
+        required_bytes = required_bytes.saturating_add(metadata.len());
+        files.push(MediaFile {
+            relative_path,
+            size_bytes: metadata.len(),
+        });
+    }
+
+    let iso_metadata = fs::metadata(iso_path).map_err(io_error)?;
+    let mut warnings = vec![
+        "Ubuntu autoinstall media is rebuilt as a UEFI-bootable FAT32 volume; legacy BIOS boot is not available"
+            .into(),
+    ];
+    if let Some(path) = oversized_file {
+        warnings.push(format!(
+            "Ubuntu autoinstall is unavailable because {} exceeds FAT32's 4 GiB per-file limit; raw image writing remains available",
+            path.display()
+        ));
+        required_bytes = 0;
+    } else {
+        required_bytes = required_bytes.saturating_add(64 * 1024 * 1024);
+    }
+    let analysis = ImageAnalysis {
+        path: iso_path.to_path_buf(),
+        kind: ImageKind::UbuntuInstaller,
+        architecture: Architecture::X86_64,
+        size_bytes: iso_metadata.len(),
+        fingerprint: fingerprint_image_file(iso_path, false)?.fingerprint,
+        required_bytes,
+        temporary_bytes: 0,
+        warnings,
+    };
+    Ok(UbuntuMediaManifest {
+        analysis,
+        root: canonical_root,
         files,
     })
 }
@@ -482,6 +574,48 @@ mod tests {
         assert_eq!(manifest.analysis.kind, ImageKind::WindowsInstaller);
         assert!(matches!(manifest.install_image, InstallImage::Esd { .. }));
         assert_eq!(manifest.files.len(), 5);
+    }
+
+    #[test]
+    fn mounted_ubuntu_layout_is_detected_and_sized_for_fat32() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("mounted");
+        fs::create_dir_all(root.join(".disk")).unwrap();
+        fs::create_dir_all(root.join("efi/boot")).unwrap();
+        fs::create_dir_all(root.join("casper")).unwrap();
+        fs::create_dir_all(root.join("boot/grub")).unwrap();
+        fs::write(root.join(".disk/info"), b"Ubuntu-Server 24.04 LTS").unwrap();
+        fs::write(root.join("efi/boot/bootx64.efi"), b"efi").unwrap();
+        fs::write(root.join("casper/vmlinuz"), b"kernel").unwrap();
+        fs::write(
+            root.join("boot/grub/grub.cfg"),
+            b"linux /casper/vmlinuz ---",
+        )
+        .unwrap();
+        let iso = temp.path().join("ubuntu.iso");
+        fs::write(&iso, b"iso fingerprint").unwrap();
+
+        let manifest = analyze_mounted_ubuntu_iso(&iso, &root).unwrap();
+        assert_eq!(manifest.analysis.kind, ImageKind::UbuntuInstaller);
+        assert_eq!(manifest.files.len(), 4);
+        assert!(manifest.analysis.required_bytes > 64 * 1024 * 1024);
+
+        fs::File::options()
+            .write(true)
+            .open(root.join("casper/vmlinuz"))
+            .unwrap()
+            .set_len(FAT32_MAX_FILE_BYTES + 1)
+            .unwrap();
+        let oversized = analyze_mounted_ubuntu_iso(&iso, &root).unwrap();
+        assert_eq!(oversized.analysis.kind, ImageKind::UbuntuInstaller);
+        assert_eq!(oversized.analysis.required_bytes, 0);
+        assert!(
+            oversized
+                .analysis
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("raw image writing remains available"))
+        );
     }
 
     #[test]

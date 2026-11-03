@@ -1,5 +1,6 @@
 use rustfus_core::{
-    ErrorCode, Fingerprint, ImageAnalysis, OperationError, OperationEvent, OperationPlan,
+    ErrorCode, Fingerprint, ImageAnalysis, InstallAutomation, OperationError, OperationEvent,
+    OperationPlan,
 };
 use rustfus_protocol::{Envelope, WorkerRequest, WorkerResponse, read_frame, write_frame};
 use rustfus_windows::{CancellationToken, StreamProgress};
@@ -84,14 +85,23 @@ fn run_transport<R: Read>(
                 image,
                 volume_label,
                 verify,
-            } => match prepare_operation(device_fingerprint, &image, &volume_label, verify) {
-                Ok(operation) => {
-                    let plan = operation.plan.clone();
-                    prepared.insert(plan.id, operation);
-                    WorkerResponse::Plan { plan }
+                automation,
+            } => {
+                match prepare_operation(
+                    device_fingerprint,
+                    &image,
+                    &volume_label,
+                    verify,
+                    automation.map(|config| *config),
+                ) {
+                    Ok(operation) => {
+                        let plan = operation.plan.clone();
+                        prepared.insert(plan.id, operation);
+                        WorkerResponse::Plan { plan }
+                    }
+                    Err(error) => WorkerResponse::Error { error },
                 }
-                Err(error) => WorkerResponse::Error { error },
-            },
+            }
             WorkerRequest::Start {
                 plan_id,
                 confirmation,
@@ -151,11 +161,12 @@ fn run_transport<R: Read>(
     Ok(())
 }
 
-#[derive(Clone)]
 struct PreparedOperation {
     plan: OperationPlan,
     #[cfg_attr(not(windows), allow(dead_code))]
     image: ImageAnalysis,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    automation: Option<InstallAutomation>,
 }
 
 fn prepare_operation(
@@ -163,6 +174,7 @@ fn prepare_operation(
     untrusted_image: &ImageAnalysis,
     volume_label: &str,
     verify: bool,
+    automation: Option<InstallAutomation>,
 ) -> Result<PreparedOperation, OperationError> {
     let image = rustfus_windows::analyze_image(&untrusted_image.path)?;
     if image.fingerprint != untrusted_image.fingerprint {
@@ -186,8 +198,12 @@ fn prepare_operation(
             "The source image is stored on the selected target disk",
         ));
     }
-    let plan = OperationPlan::create(&device, &image, volume_label, verify)?;
-    Ok(PreparedOperation { plan, image })
+    let plan = OperationPlan::create(&device, &image, volume_label, verify, automation.as_ref())?;
+    Ok(PreparedOperation {
+        plan,
+        image,
+        automation,
+    })
 }
 
 fn spawn_operation(
@@ -290,12 +306,40 @@ where
                 rustfus_windows::update_disk_properties(&target)?;
                 Ok(())
             }
-            rustfus_core::WriteMode::WindowsMbrFat32 => rustfus_windows::create_windows_installer(
-                &operation.plan,
-                &current_device,
-                cancellation,
-                progress,
-            ),
+            rustfus_core::WriteMode::WindowsMbrFat32 => {
+                let config = match operation.automation.as_ref() {
+                    Some(InstallAutomation::Windows(config)) => Some(config),
+                    None => None,
+                    Some(InstallAutomation::Ubuntu(_)) => {
+                        return Err(OperationError::new(
+                            ErrorCode::Internal,
+                            "Ubuntu automation reached the Windows media pipeline",
+                        ));
+                    }
+                };
+                rustfus_windows::create_windows_installer(
+                    &operation.plan,
+                    &current_device,
+                    config,
+                    cancellation,
+                    progress,
+                )
+            }
+            rustfus_core::WriteMode::UbuntuUefiFat32 => {
+                let Some(InstallAutomation::Ubuntu(config)) = operation.automation.as_ref() else {
+                    return Err(OperationError::new(
+                        ErrorCode::Internal,
+                        "Ubuntu media creation requires an autoinstall configuration",
+                    ));
+                };
+                rustfus_windows::create_ubuntu_installer(
+                    &operation.plan,
+                    &current_device,
+                    config,
+                    cancellation,
+                    progress,
+                )
+            }
         }
     }
 }

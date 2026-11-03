@@ -10,7 +10,7 @@ mod registry;
 mod session;
 
 use platform::PipeSession;
-use rustfus_core::{DeviceSnapshot, ErrorCode, OperationError};
+use rustfus_core::{DeviceSnapshot, ErrorCode, InstallAutomation, OperationError};
 use serde_json::Value;
 use session::{OpenRequest, SessionError};
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -18,7 +18,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub const ABI_VERSION: i32 = 1;
+pub const ABI_VERSION: i32 = 4;
 
 const OK: i32 = 0;
 const PANIC: i32 = -1;
@@ -28,6 +28,8 @@ const CLOSED: i32 = -4;
 
 /// Longest wide string accepted from the UI, in UTF-16 units (the Windows path limit).
 const MAX_WIDE_UNITS: usize = 32_768;
+/// Imported XML plus JSON escaping. The Rust model separately limits the decoded XML to 2 MiB.
+const MAX_UNATTEND_WIDE_UNITS: usize = 4 * 1024 * 1024;
 
 enum Failure {
     InvalidArgument(&'static str),
@@ -95,15 +97,24 @@ unsafe fn run(out_json: *mut *mut c_char, body: impl FnOnce() -> Result<Value, F
 }
 
 unsafe fn wide_arg(ptr: *const u16, what: &'static str) -> Result<String, Failure> {
+    // SAFETY: forwarded pointer contract.
+    unsafe { wide_arg_limited(ptr, what, MAX_WIDE_UNITS) }
+}
+
+unsafe fn wide_arg_limited(
+    ptr: *const u16,
+    what: &'static str,
+    maximum_units: usize,
+) -> Result<String, Failure> {
     if ptr.is_null() {
         return Err(Failure::InvalidArgument(what));
     }
     let mut length = 0;
     // SAFETY: the caller guarantees a NUL-terminated buffer; reading stops at the NUL or the cap.
-    while length < MAX_WIDE_UNITS && unsafe { *ptr.add(length) } != 0 {
+    while length < maximum_units && unsafe { *ptr.add(length) } != 0 {
         length += 1;
     }
-    if length == MAX_WIDE_UNITS {
+    if length == maximum_units {
         return Err(Failure::InvalidArgument(what));
     }
     // SAFETY: `length` units were just read from the buffer.
@@ -151,6 +162,46 @@ pub unsafe extern "C" fn rustfus_string_free(text: *mut c_char) {
     if !text.is_null() {
         // SAFETY: allocated by `CString::into_raw` in `write_json`, freed exactly once.
         drop(unsafe { CString::from_raw(text) });
+    }
+}
+
+fn hash_linux_password(password: &str) -> Result<String, OperationError> {
+    use sha_crypt::{PasswordHasher as _, ShaCrypt};
+
+    if password.is_empty() || password.len() > 1024 {
+        return Err(OperationError::new(
+            ErrorCode::InvalidAutoinstallConfig,
+            "The Ubuntu account password must contain 1-1024 UTF-8 bytes",
+        ));
+    }
+    ShaCrypt::SHA512
+        .hash_password(password.as_bytes())
+        .map(|hash| hash.to_string())
+        .map_err(|error| {
+            OperationError::new(
+                ErrorCode::InvalidAutoinstallConfig,
+                format!("Could not hash the Ubuntu account password: {error}"),
+            )
+        })
+}
+
+/// Hashes an Ubuntu account password locally as salted SHA-512 crypt (`$6$`).
+///
+/// # Safety
+///
+/// `password` must be NUL-terminated UTF-16; `out_json` as for `rustfus_enumerate_devices`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustfus_hash_linux_password(
+    password: *const u16,
+    out_json: *mut *mut c_char,
+) -> i32 {
+    // SAFETY: forwarded ABI contract.
+    unsafe {
+        run(out_json, || {
+            let password = wide_arg_limited(password, "password", 1024)?;
+            let hash = hash_linux_password(&password)?;
+            Ok(serde_json::json!({ "hash": hash }))
+        })
     }
 }
 
@@ -209,6 +260,7 @@ pub unsafe extern "C" fn rustfus_session_start(
     image_id: *const c_char,
     volume_label: *const u16,
     verify: i32,
+    automation_json: *const u16,
     confirmation: *const u16,
     worker_path: *const u16,
     out_session: *mut *mut c_void,
@@ -226,6 +278,24 @@ pub unsafe extern "C" fn rustfus_session_start(
             let device_id = utf8_arg(device_id, "device_id")?;
             let image_id = utf8_arg(image_id, "image_id")?;
             let volume_label = wide_arg(volume_label, "volume_label")?;
+            let automation_json =
+                wide_arg_limited(automation_json, "automation_json", MAX_UNATTEND_WIDE_UNITS)?;
+            let automation = if automation_json.is_empty() {
+                None
+            } else {
+                Some(
+                    serde_json::from_str::<InstallAutomation>(&automation_json).map_err(
+                        |error| {
+                            Failure::Operation(OperationError::new(
+                                ErrorCode::InvalidAutomationConfig,
+                                format!(
+                                    "The installation automation configuration is invalid: {error}"
+                                ),
+                            ))
+                        },
+                    )?,
+                )
+            };
             let confirmation = wide_arg(confirmation, "confirmation")?;
             let worker_path = PathBuf::from(wide_arg(worker_path, "worker_path")?);
             let (device, image) = {
@@ -246,6 +316,7 @@ pub unsafe extern "C" fn rustfus_session_start(
                     image,
                     volume_label,
                     verify: verify != 0,
+                    automation,
                     confirmation,
                 })?;
             *out_session = Arc::into_raw(Arc::new(session)).cast_mut().cast::<c_void>();
@@ -324,8 +395,8 @@ mod tests {
     }
 
     #[test]
-    fn abi_version_is_one() {
-        assert_eq!(rustfus_abi_version(), 1);
+    fn abi_version_is_four() {
+        assert_eq!(rustfus_abi_version(), 4);
     }
 
     #[test]
@@ -333,6 +404,20 @@ mod tests {
         let (code, value) = call(|| Ok(serde_json::json!({"a": 1})));
         assert_eq!(code, OK);
         assert_eq!(value["a"], 1);
+    }
+
+    #[test]
+    fn ubuntu_passwords_are_salted_sha512_crypt_hashes() {
+        use sha_crypt::{PasswordVerifier as _, ShaCrypt};
+
+        let first = hash_linux_password("correct horse battery staple").unwrap();
+        let second = hash_linux_password("correct horse battery staple").unwrap();
+        assert!(first.starts_with("$6$"));
+        assert_ne!(first, second);
+        let parsed = sha_crypt::PasswordHash::new(&first).unwrap();
+        ShaCrypt::SHA512
+            .verify_password(b"correct horse battery staple", &parsed)
+            .unwrap();
     }
 
     #[test]
@@ -381,8 +466,9 @@ mod tests {
     fn unknown_ids_are_rejected_before_any_worker_is_launched() {
         let id = CString::new("nope").unwrap();
         let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
-        let (label, confirmation, worker) = (
+        let (label, unattend, confirmation, worker) = (
             wide("RUSTFUS"),
+            wide(""),
             wide("ERASE"),
             wide("C:\\x\\rustfus-worker.exe"),
         );
@@ -395,6 +481,7 @@ mod tests {
                 id.as_ptr(),
                 label.as_ptr(),
                 1,
+                unattend.as_ptr(),
                 confirmation.as_ptr(),
                 worker.as_ptr(),
                 &raw mut session,

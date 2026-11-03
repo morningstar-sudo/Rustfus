@@ -2,8 +2,8 @@
 //! testable without Windows, UAC or a real worker.
 
 use rustfus_core::{
-    ErrorCode, Fingerprint, ImageAnalysis, OperationError, OperationEvent, OperationPhase,
-    OperationPlan,
+    ErrorCode, Fingerprint, ImageAnalysis, InstallAutomation, OperationError, OperationEvent,
+    OperationPhase, OperationPlan,
 };
 use rustfus_protocol::{
     Envelope, ProtocolError, WorkerRequest, WorkerResponse, read_frame, write_frame,
@@ -30,6 +30,7 @@ pub struct OpenRequest {
     pub image: ImageAnalysis,
     pub volume_label: String,
     pub verify: bool,
+    pub automation: Option<InstallAutomation>,
     /// Sent verbatim: the worker, not the UI, decides whether the phrase is acceptable.
     pub confirmation: String,
 }
@@ -123,6 +124,7 @@ impl<R: Read, W: Write> Session<R, W> {
                 image: request.image,
                 volume_label: request.volume_label,
                 verify: request.verify,
+                automation: request.automation.map(Box::new),
             },
         )? {
             WorkerResponse::Plan { plan } => plan,
@@ -330,6 +332,7 @@ mod tests {
             image: image(),
             volume_label: "RUSTFUS".into(),
             verify: true,
+            automation: None,
             confirmation: confirmation.into(),
         }
     }

@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 hex.workspace = true
+md-5.workspace = true
 rustfus-core = { version = "0.1.0", path = "../rustfus-core" }
 rustfus-disk = { version = "0.1.0", path = "../rustfus-disk" }
 rustfus-image = { version = "0.1.0", path = "../rustfus-image" }

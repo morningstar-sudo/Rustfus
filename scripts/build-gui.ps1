@@ -38,7 +38,7 @@ $sources = @(Get-ChildItem -LiteralPath $source -Filter "*.cs" | Select-Object -
     "-win32manifest:$(Join-Path $source 'app.manifest')" `
     "-resource:$(Join-Path $source 'MainWindow.xaml'),Rustfus.MainWindow.xaml" `
     "-r:$wpf\PresentationFramework.dll" "-r:$wpf\PresentationCore.dll" "-r:$wpf\WindowsBase.dll" `
-    "-r:System.Xaml.dll" `
+    "-r:System.Xaml.dll" "-r:System.Xml.dll" `
     $sources
 if ($LASTEXITCODE -ne 0) { throw "The C# compiler failed with exit code $LASTEXITCODE" }
 

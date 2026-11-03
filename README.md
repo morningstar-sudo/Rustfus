@@ -5,6 +5,7 @@ Rustfus is an independent, Apache-2.0 licensed Windows application for creating 
 ## v0.1 target
 
 - Microsoft Windows 10 22H2 and Windows 11 x64 installation media
+- x86_64 Ubuntu installation media, including optional zero-touch `NoCloud` autoinstall for UEFI systems
 - x86_64 hybrid Linux ISO images
 - USB targets only, with system-disk exclusion and device revalidation
 - Full read-back verification enabled by default
@@ -31,7 +32,15 @@ Device identity is the Windows PnP instance ID resolved through SetupAPI; page-f
 
 Windows media analysis validates the required setup layout and requires the embedded `bootsect.exe` Authenticode signer organization to be Microsoft Corporation. Raw writes of hybrid images and read-back verification run as a two-thread pipeline, and image analysis uses all cores. Stale WIM split workspaces under `%TEMP%\Rustfus` are removed after seven days.
 
-The interface supports ISO selection by dialog or drag and drop, the explicit erase confirmation, a per-session log in `%LOCALAPPDATA%\Rustfus\logs` (files older than 30 days are removed) with an **Export log** button, and worker progress (phase, percentage, throughput) with cancellation. `Rustfus.exe --self-test` checks the installation without opening a window; `Rustfus.exe --demo` runs with fake data and never touches a disk.
+The interface supports ISO selection by dialog or drag and drop, the explicit erase confirmation, a per-session log in `%LOCALAPPDATA%\Rustfus\logs` (files older than 30 days are removed) with an **Export log** button, and worker progress (phase, percentage, throughput) with cancellation. After a Windows ISO is recognized, a separate **Windows unattended setup** panel offers two paths. The guided builder lets the user choose locale/keyboard, time zone, computer name, local administrator/password/one-time auto-logon, hardware-requirement bypass, offline-account setup, and privacy-question behavior. **Complete Schneegans configuration** opens the [full UnattendGenerator](https://schneegans.de/windows/unattend-generator/) and imports its resulting `autounattend.xml` without discarding advanced options, embedded scripts, or its `Extensions` block. This import path automatically follows new upstream options without requiring matching Rustfus controls.
+
+Linux images never receive Windows configuration. Generated or imported XML is validated at the UI/worker boundary, written to the USB root, and participates in read-back verification when full verification is enabled.
+
+Recognized Ubuntu media has its own **Ubuntu zero-touch autoinstall** panel. Its full visual editor exposes identity and locally hashed account credentials, locale, keyboard, time zone, Netplan, curtin storage, APT, Ubuntu Pro, SSH, packages, snaps, drivers, codecs, updates, OEM packages, installer refresh/source, kernel, crash dumps, Active Directory, interactive sections, reporting, target cloud-init data, debconf, IBM Z devices, and early/late/error commands. Open-schema sections use focused YAML editors, and the final generated `user-data` remains editable so every current or future Subiquity key is available without waiting for a Rustfus release. Complete existing `user-data` and optional `meta-data` files can still be imported instead.
+
+Rustfus adds the resulting configuration as a `NoCloud` seed, patches the GRUB/ISOLINUX kernel arguments, and updates the ISO checksum manifest. This flow follows the layout used by [ubuntu-autoinstall-generator](https://github.com/covertsh/ubuntu-autoinstall-generator). Because Rustfus rebuilds the target as FAT32 without bundling third-party ISO mastering tools, autoinstall output is UEFI-only and is disabled when a source file exceeds FAT32's 4 GiB per-file limit. The same recognized Ubuntu ISO can still be written byte-for-byte and retain its original boot modes with autoinstall disabled.
+
+`Rustfus.exe --self-test` checks the installation without opening a window; `Rustfus.exe --demo` runs with fake data and never touches a disk. Passwords entered for unattended setup are necessarily stored in plain text in `autounattend.xml` or Ubuntu `user-data` on the removable media; the UI calls this out before the operation. Complete imported configurations can contain commands or scripts that run during setup, so import only files whose contents and source you trust.
 
 This is a release candidate. Protocol, disk-layout, image-analysis, fault-injection, Authenticode, and Windows-native tests are automated. The stable v0.1 tag remains gated on the physical-device, boot, and accessibility matrix in `RELEASE.md`. Do not use candidate builds on media containing data you need.
 

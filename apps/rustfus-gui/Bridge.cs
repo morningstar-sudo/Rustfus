@@ -46,11 +46,16 @@ internal static class RustfusNative
         [MarshalAs(UnmanagedType.LPWStr)] string path, out IntPtr json);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int rustfus_hash_linux_password(
+        [MarshalAs(UnmanagedType.LPWStr)] string password, out IntPtr json);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     public static extern int rustfus_session_start(
         [MarshalAs(UnmanagedType.LPStr)] string deviceId,
         [MarshalAs(UnmanagedType.LPStr)] string imageId,
         [MarshalAs(UnmanagedType.LPWStr)] string volumeLabel,
         int verify,
+        [MarshalAs(UnmanagedType.LPWStr)] string automationJson,
         [MarshalAs(UnmanagedType.LPWStr)] string confirmation,
         [MarshalAs(UnmanagedType.LPWStr)] string workerPath,
         out IntPtr session,
@@ -69,7 +74,7 @@ internal static class RustfusNative
 internal static class Bridge
 {
     public const int StatusClosed = -4;
-    private const int ExpectedAbi = 1;
+    private const int ExpectedAbi = 4;
 
     /// Loads rustfus_ffi.dll from the application directory only (never from PATH or the CWD).
     public static bool TryLoad(out string error)
@@ -177,14 +182,21 @@ internal static class Bridge
         return Take(status, json);
     }
 
+    public static string HashPassword(string password)
+    {
+        IntPtr json;
+        int status = RustfusNative.rustfus_hash_linux_password(password, out json);
+        return Str(Take(status, json), "hash");
+    }
+
     /// Launches the elevated worker (UAC), prepares a plan and starts the operation. Blocks.
     public static BridgeSession StartSession(string deviceId, string imageId, string volumeLabel,
-        bool verify, string confirmation, string workerPath)
+        bool verify, string automationJson, string confirmation, string workerPath)
     {
         IntPtr handle;
         IntPtr json;
         int status = RustfusNative.rustfus_session_start(deviceId, imageId, volumeLabel,
-            verify ? 1 : 0, confirmation, workerPath, out handle, out json);
+            verify ? 1 : 0, automationJson, confirmation, workerPath, out handle, out json);
         Dictionary<string, object> plan = Take(status, json);
         return new BridgeSession(handle, plan);
     }

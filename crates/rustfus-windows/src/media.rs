@@ -15,9 +15,11 @@ use rustfus_core::{
 };
 use rustfus_disk::{Fat32Layout, MbrPartition, format_empty_fat32, write_mbr};
 use rustfus_image::{
-    InstallImage, STREAM_BUFFER_BYTES, WindowsMediaManifest, analyze_hybrid_iso,
-    analyze_mounted_windows_iso, copy_file_verified_with_buffer, fingerprint_file_with_buffer,
+    InstallImage, STREAM_BUFFER_BYTES, UbuntuMediaManifest, WindowsMediaManifest,
+    analyze_hybrid_iso, analyze_mounted_ubuntu_iso, analyze_mounted_windows_iso,
+    copy_file_verified_with_buffer, fingerprint_file_with_buffer,
 };
+use sha2::{Digest, Sha256};
 use std::ffi::c_void;
 use std::fs;
 use std::io;
@@ -146,18 +148,27 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis, OperationError> {
                 .map_err(|error| explain_mount_failure(error, &mount_error));
         }
     };
-    if !looks_like_windows_media(&mounted.root) {
-        return analyze_hybrid_iso(path);
+    if looks_like_windows_media(&mounted.root) {
+        // It is a Windows installer: report its real problems instead of falling back to raw.
+        let manifest = analyze_mounted_windows_iso(path, &mounted.root)?;
+        verify_trusted_executable(&manifest.bootsect_path)?;
+        return Ok(manifest.analysis);
     }
-    // It is a Windows installer: report its real problems instead of falling back to a raw write.
-    let manifest = analyze_mounted_windows_iso(path, &mounted.root)?;
-    verify_trusted_executable(&manifest.bootsect_path)?;
-    Ok(manifest.analysis)
+    if looks_like_ubuntu_media(&mounted.root) {
+        return Ok(analyze_mounted_ubuntu_iso(path, &mounted.root)?.analysis);
+    }
+    analyze_hybrid_iso(path)
 }
 
 /// Windows installation media always carries `bootmgr` and `sources\boot.wim`.
 fn looks_like_windows_media(root: &Path) -> bool {
     root.join("bootmgr").exists() || root.join("sources").join("boot.wim").exists()
+}
+
+fn looks_like_ubuntu_media(root: &Path) -> bool {
+    root.join(".disk").join("info").is_file()
+        && root.join("casper").join("vmlinuz").is_file()
+        && root.join("boot").join("grub").join("grub.cfg").is_file()
 }
 
 fn explain_mount_failure(error: OperationError, mount_error: &OperationError) -> OperationError {
@@ -214,6 +225,7 @@ fn cleanup_stale_under(
 pub fn create_windows_installer<F>(
     plan: &OperationPlan,
     device: &DeviceSnapshot,
+    unattend: Option<&rustfus_core::UnattendConfig>,
     cancellation: &CancellationToken,
     mut progress: F,
 ) -> Result<(), OperationError>
@@ -242,7 +254,284 @@ where
     let target_root = prepare_fat32_target(device, &plan.volume_label)?;
     check_cancelled(cancellation, true)?;
     run_bootsect(&manifest.bootsect_path, &target_root)?;
-    copy_windows_tree(&manifest, &target_root, plan.verify, cancellation, progress)?;
+    let unattend = unattend
+        .map(rustfus_core::UnattendConfig::to_xml_bytes)
+        .transpose()?;
+    copy_windows_tree(
+        &manifest,
+        &target_root,
+        plan.verify,
+        unattend.as_deref(),
+        cancellation,
+        progress,
+    )?;
+    Ok(())
+}
+
+pub fn create_ubuntu_installer<F>(
+    plan: &OperationPlan,
+    device: &DeviceSnapshot,
+    config: &rustfus_core::UbuntuAutoinstallConfig,
+    cancellation: &CancellationToken,
+    mut progress: F,
+) -> Result<(), OperationError>
+where
+    F: FnMut(StreamProgress),
+{
+    if plan.mode != WriteMode::UbuntuUefiFat32 {
+        return Err(OperationError::new(
+            ErrorCode::Internal,
+            "A non-Ubuntu operation was sent to the Ubuntu media pipeline",
+        ));
+    }
+    config.validate()?;
+    check_cancelled(cancellation, false)?;
+    let mounted = MountedIso::attach(&plan.source)?;
+    let manifest = analyze_mounted_ubuntu_iso(&plan.source, &mounted.root)?;
+    if manifest.analysis.required_bytes == 0 {
+        return Err(OperationError::new(
+            ErrorCode::UnsupportedLargeFile,
+            "Ubuntu autoinstall cannot use this image because it contains a file larger than FAT32's 4 GiB per-file limit",
+        ));
+    }
+    if manifest.analysis.fingerprint != plan.image_fingerprint {
+        return Err(OperationError::new(
+            ErrorCode::ImageChanged,
+            "The Ubuntu ISO changed after the operation was planned",
+        ));
+    }
+
+    emit(&mut progress, OperationPhase::Prepare, 0, 1, Instant::now());
+    let target_root = prepare_fat32_target(device, &plan.volume_label)?;
+    check_cancelled(cancellation, true)?;
+    copy_ubuntu_tree(
+        &manifest,
+        &target_root,
+        config,
+        plan.verify,
+        cancellation,
+        progress,
+    )
+}
+
+fn copy_ubuntu_tree<F>(
+    manifest: &UbuntuMediaManifest,
+    target_root: &Path,
+    config: &rustfus_core::UbuntuAutoinstallConfig,
+    verify: bool,
+    cancellation: &CancellationToken,
+    mut progress: F,
+) -> Result<(), OperationError>
+where
+    F: FnMut(StreamProgress),
+{
+    let total = manifest
+        .files
+        .iter()
+        .map(|file| file.size_bytes)
+        .sum::<u64>()
+        .saturating_add(config.bytes_to_write());
+    let started = Instant::now();
+    let mut completed = 0_u64;
+    let mut io_buffer = vec![0_u8; STREAM_BUFFER_BYTES];
+    let mut written_files = Vec::<(PathBuf, [u8; 32], u64)>::new();
+    let mut patched = Vec::<(String, Vec<u8>)>::new();
+    let mut md5sum_source = None;
+
+    for file in &manifest.files {
+        check_cancelled(cancellation, true)?;
+        let key = relative_key(&file.relative_path);
+        if matches!(key.as_str(), "nocloud/user-data" | "nocloud/meta-data") {
+            continue;
+        }
+        let source = manifest.root.join(&file.relative_path);
+        if key == "md5sum.txt" {
+            md5sum_source = Some(source);
+            continue;
+        }
+        let destination = target_root.join(&file.relative_path);
+        if is_ubuntu_boot_config(&key) {
+            let original = fs::read_to_string(&source).map_err(io_operation_error)?;
+            let modified = patch_ubuntu_boot_config(&key, &original)?;
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent).map_err(io_operation_error)?;
+            }
+            fs::write(&destination, modified.as_bytes()).map_err(io_operation_error)?;
+            let bytes = modified.into_bytes();
+            let expected: [u8; 32] = Sha256::digest(&bytes).into();
+            completed = completed.saturating_add(bytes.len() as u64);
+            emit(
+                &mut progress,
+                OperationPhase::Write,
+                completed,
+                total.max(completed),
+                started,
+            );
+            written_files.push((destination, expected, bytes.len() as u64));
+            patched.push((key, bytes));
+        } else {
+            let expected = copy_file_verified_with_buffer(
+                &source,
+                &destination,
+                false,
+                &mut io_buffer,
+                |count| {
+                    completed = completed.saturating_add(count);
+                    emit(
+                        &mut progress,
+                        OperationPhase::Write,
+                        completed,
+                        total.max(completed),
+                        started,
+                    );
+                },
+            )?;
+            written_files.push((destination, expected, file.size_bytes));
+        }
+    }
+
+    if !patched.iter().any(|(path, _)| path == "boot/grub/grub.cfg") {
+        return Err(OperationError::new(
+            ErrorCode::InvalidImage,
+            "Ubuntu boot/grub/grub.cfg was not patched for autoinstall",
+        ));
+    }
+
+    for (name, bytes) in [
+        ("user-data", config.user_data.as_bytes()),
+        ("meta-data", config.meta_data.as_bytes()),
+    ] {
+        let destination = target_root.join("nocloud").join(name);
+        fs::create_dir_all(destination.parent().unwrap()).map_err(io_operation_error)?;
+        fs::write(&destination, bytes).map_err(io_operation_error)?;
+        let expected: [u8; 32] = Sha256::digest(bytes).into();
+        completed = completed.saturating_add(bytes.len() as u64);
+        emit(
+            &mut progress,
+            OperationPhase::Write,
+            completed,
+            total.max(completed),
+            started,
+        );
+        written_files.push((destination, expected, bytes.len() as u64));
+    }
+
+    if let Some(source) = md5sum_source {
+        let original = fs::read_to_string(source).map_err(io_operation_error)?;
+        let updated = update_ubuntu_md5s(&original, &patched);
+        let destination = target_root.join("md5sum.txt");
+        fs::write(&destination, updated.as_bytes()).map_err(io_operation_error)?;
+        let expected: [u8; 32] = Sha256::digest(updated.as_bytes()).into();
+        written_files.push((destination, expected, updated.len() as u64));
+    }
+
+    flush_volume(target_root)?;
+    verify_written_files(
+        written_files,
+        verify,
+        cancellation,
+        &mut io_buffer,
+        &mut progress,
+    )
+}
+
+fn relative_key(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase()
+}
+
+fn is_ubuntu_boot_config(path: &str) -> bool {
+    matches!(
+        path,
+        "boot/grub/grub.cfg" | "boot/grub/loopback.cfg" | "isolinux/txt.cfg"
+    )
+}
+
+fn patch_ubuntu_boot_config(path: &str, original: &str) -> Result<String, OperationError> {
+    if original.contains("autoinstall") && original.contains("ds=nocloud") {
+        return Ok(original.to_owned());
+    }
+    if !original.contains("---") {
+        if path != "boot/grub/grub.cfg" {
+            return Ok(original.to_owned());
+        }
+        return Err(OperationError::new(
+            ErrorCode::InvalidImage,
+            format!("Ubuntu boot configuration {path} has no kernel argument terminator"),
+        ));
+    }
+    let data_source = if path.starts_with("boot/grub/") {
+        r" autoinstall ds=nocloud\;s=/cdrom/nocloud/ ---"
+    } else {
+        " autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"
+    };
+    Ok(original.replace("---", data_source))
+}
+
+fn update_ubuntu_md5s(original: &str, patched: &[(String, Vec<u8>)]) -> String {
+    let mut output = String::with_capacity(original.len());
+    for line in original.lines() {
+        let replacement = patched.iter().find(|(path, _)| {
+            line.get(34..)
+                .map(str::trim)
+                .is_some_and(|listed| listed.trim_start_matches("./").eq_ignore_ascii_case(path))
+        });
+        if let Some((_, bytes)) = replacement {
+            let digest = md5::Md5::digest(bytes);
+            output.push_str(&hex::encode(digest));
+            output.push_str(&line[32..]);
+        } else {
+            output.push_str(line);
+        }
+        output.push('\n');
+    }
+    output
+}
+
+fn verify_written_files<F>(
+    written_files: Vec<(PathBuf, [u8; 32], u64)>,
+    verify: bool,
+    cancellation: &CancellationToken,
+    io_buffer: &mut [u8],
+    progress: &mut F,
+) -> Result<(), OperationError>
+where
+    F: FnMut(StreamProgress),
+{
+    if !verify {
+        return Ok(());
+    }
+    let verify_total = written_files.iter().map(|(_, _, size)| size).sum::<u64>();
+    let verify_started = Instant::now();
+    let mut verified = 0_u64;
+    for (destination, expected, _) in written_files {
+        check_cancelled(cancellation, true)?;
+        let actual = fingerprint_file_with_buffer(&destination, io_buffer, |count| {
+            check_cancelled(cancellation, true)?;
+            verified = verified.saturating_add(count);
+            emit(
+                progress,
+                OperationPhase::Verify,
+                verified,
+                verify_total,
+                verify_started,
+            );
+            Ok(())
+        })?
+        .0;
+        if actual != expected {
+            return Err(OperationError::new(
+                ErrorCode::VerificationFailed,
+                format!(
+                    "Read-back verification failed for {} (expected {}, got {})",
+                    destination.display(),
+                    hex::encode(expected),
+                    hex::encode(actual)
+                ),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -361,6 +650,7 @@ fn copy_windows_tree<F>(
     manifest: &WindowsMediaManifest,
     target_root: &Path,
     verify: bool,
+    unattend: Option<&[u8]>,
     cancellation: &CancellationToken,
     mut progress: F,
 ) -> Result<(), OperationError>
@@ -378,7 +668,8 @@ where
         .files
         .iter()
         .map(|file| file.size_bytes)
-        .sum::<u64>();
+        .sum::<u64>()
+        .saturating_add(unattend.map_or(0, |bytes| bytes.len() as u64));
     let started = Instant::now();
     let mut completed = 0_u64;
     let mut io_buffer = vec![0_u8; STREAM_BUFFER_BYTES];
@@ -457,6 +748,22 @@ where
             )?;
             written_files.push((destination, expected, part_size));
         }
+    }
+
+    if let Some(bytes) = unattend {
+        check_cancelled(cancellation, true)?;
+        let destination = target_root.join("autounattend.xml");
+        fs::write(&destination, bytes).map_err(io_operation_error)?;
+        let expected: [u8; 32] = Sha256::digest(bytes).into();
+        completed = completed.saturating_add(bytes.len() as u64);
+        emit(
+            &mut progress,
+            OperationPhase::Write,
+            completed,
+            total.max(completed),
+            started,
+        );
+        written_files.push((destination, expected, bytes.len() as u64));
     }
 
     // Every destination file handle is closed at this point. A single volume
@@ -983,6 +1290,53 @@ mod tests {
         assert_eq!(error.code, ErrorCode::InvalidImage);
         assert!(error.message.starts_with("no MBR signature"));
         assert!(error.message.contains("Could not attach ISO"));
+    }
+
+    #[test]
+    fn ubuntu_boot_arguments_are_patched_for_grub_and_isolinux() {
+        let grub =
+            patch_ubuntu_boot_config("boot/grub/grub.cfg", "linux /casper/vmlinuz quiet ---\n")
+                .unwrap();
+        assert!(grub.contains(r"autoinstall ds=nocloud\;s=/cdrom/nocloud/ ---"));
+
+        let isolinux = patch_ubuntu_boot_config(
+            "isolinux/txt.cfg",
+            "append initrd=/casper/initrd quiet ---\n",
+        )
+        .unwrap();
+        assert!(isolinux.contains("autoinstall ds=nocloud;s=/cdrom/nocloud/ ---"));
+        assert!(!isolinux.contains(r"nocloud\;"));
+    }
+
+    #[test]
+    fn ubuntu_optional_boot_config_without_terminator_is_preserved() {
+        let original = "source /boot/grub/grub.cfg\n";
+        assert_eq!(
+            patch_ubuntu_boot_config("boot/grub/loopback.cfg", original).unwrap(),
+            original
+        );
+        assert_eq!(
+            patch_ubuntu_boot_config("boot/grub/grub.cfg", original)
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidImage
+        );
+    }
+
+    #[test]
+    fn ubuntu_md5_manifest_tracks_patched_boot_files() {
+        let bytes = b"patched grub\n".to_vec();
+        let original = concat!(
+            "00000000000000000000000000000000  ./boot/grub/grub.cfg\n",
+            "11111111111111111111111111111111  ./casper/vmlinuz\n"
+        );
+        let updated = update_ubuntu_md5s(
+            original,
+            &[("boot/grub/grub.cfg".to_owned(), bytes.clone())],
+        );
+        let expected = hex::encode(md5::Md5::digest(bytes));
+        assert!(updated.starts_with(&expected));
+        assert!(updated.contains("11111111111111111111111111111111  ./casper/vmlinuz"));
     }
 
     #[test]

@@ -6,7 +6,13 @@ use std::fmt;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 1;
+mod ubuntu;
+mod unattend;
+
+pub use ubuntu::UbuntuAutoinstallConfig;
+pub use unattend::UnattendConfig;
+
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const CONFIRMATION_PHRASE: &str = "ERASE";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +72,7 @@ pub enum BusType {
 #[serde(rename_all = "snake_case")]
 pub enum ImageKind {
     WindowsInstaller,
+    UbuntuInstaller,
     HybridDisk,
 }
 
@@ -91,7 +98,38 @@ pub struct ImageAnalysis {
 #[serde(rename_all = "snake_case")]
 pub enum WriteMode {
     WindowsMbrFat32,
+    UbuntuUefiFat32,
     HybridRaw,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "platform", content = "config", rename_all = "snake_case")]
+pub enum InstallAutomation {
+    Windows(UnattendConfig),
+    Ubuntu(UbuntuAutoinstallConfig),
+}
+
+impl InstallAutomation {
+    fn validate_for(&self, image_kind: ImageKind) -> Result<u64, OperationError> {
+        match (self, image_kind) {
+            (Self::Windows(config), ImageKind::WindowsInstaller) => {
+                config.validate()?;
+                Ok(config.to_xml_bytes()?.len() as u64)
+            }
+            (Self::Ubuntu(config), ImageKind::UbuntuInstaller) => {
+                config.validate()?;
+                Ok(config.bytes_to_write())
+            }
+            (Self::Windows(_), _) => Err(OperationError::new(
+                ErrorCode::InvalidUnattendConfig,
+                "Windows unattended setup is available only for Windows installation media",
+            )),
+            (Self::Ubuntu(_), _) => Err(OperationError::new(
+                ErrorCode::InvalidAutoinstallConfig,
+                "Ubuntu autoinstall is available only for recognized Ubuntu installation media",
+            )),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +165,7 @@ impl OperationPlan {
         image: &ImageAnalysis,
         volume_label: &str,
         verify: bool,
+        automation: Option<&InstallAutomation>,
     ) -> Result<Self, OperationError> {
         if !device.is_eligible_usb_target() {
             return Err(OperationError::new(
@@ -134,24 +173,57 @@ impl OperationPlan {
                 "The selected device is not an eligible USB target",
             ));
         }
-        if device.capacity_bytes < image.required_bytes {
+        validate_volume_label(volume_label)?;
+
+        let automation_bytes = automation
+            .map(|config| config.validate_for(image.kind))
+            .transpose()?
+            .unwrap_or(0);
+        let mode = match (image.kind, automation) {
+            (ImageKind::WindowsInstaller, _) => WriteMode::WindowsMbrFat32,
+            (ImageKind::UbuntuInstaller, Some(InstallAutomation::Ubuntu(_))) => {
+                WriteMode::UbuntuUefiFat32
+            }
+            (ImageKind::UbuntuInstaller | ImageKind::HybridDisk, None) => WriteMode::HybridRaw,
+            // A mismatched automation value was rejected by `validate_for` above.
+            (ImageKind::UbuntuInstaller | ImageKind::HybridDisk, Some(_)) => {
+                return Err(OperationError::new(
+                    ErrorCode::Internal,
+                    "The automation configuration does not match the image type",
+                ));
+            }
+        };
+        if mode == WriteMode::UbuntuUefiFat32 && image.required_bytes == 0 {
+            return Err(OperationError::new(
+                ErrorCode::UnsupportedLargeFile,
+                "Ubuntu autoinstall cannot use this image because it contains a file larger than FAT32's 4 GiB per-file limit",
+            ));
+        }
+        let media_bytes = if mode == WriteMode::HybridRaw {
+            image.size_bytes
+        } else {
+            image.required_bytes
+        };
+        let bytes_to_write = media_bytes.saturating_add(automation_bytes);
+        if device.capacity_bytes < bytes_to_write {
             return Err(OperationError::new(
                 ErrorCode::InsufficientCapacity,
                 "The selected device is smaller than the required media size",
             ));
         }
-        validate_volume_label(volume_label)?;
 
-        let mode = match image.kind {
-            ImageKind::WindowsInstaller => WriteMode::WindowsMbrFat32,
-            ImageKind::HybridDisk => WriteMode::HybridRaw,
-        };
-        let actions = match mode {
+        let mut actions = match mode {
             WriteMode::WindowsMbrFat32 => vec![
                 destructive("Erase the selected USB disk"),
                 destructive("Create an active MBR/FAT32 partition"),
                 destructive("Install Microsoft boot code from the source ISO"),
                 destructive("Copy and verify Windows Setup files"),
+            ],
+            WriteMode::UbuntuUefiFat32 => vec![
+                destructive("Erase the selected USB disk"),
+                destructive("Create an active MBR/FAT32 partition for UEFI boot"),
+                destructive("Copy and verify Ubuntu installation files"),
+                destructive("Patch Ubuntu boot menus for zero-touch autoinstall"),
             ],
             WriteMode::HybridRaw => vec![
                 destructive("Erase the selected USB disk"),
@@ -159,6 +231,17 @@ impl OperationPlan {
                 destructive("Read back and verify the image"),
             ],
         };
+        if let Some(config) = automation {
+            let description = match config {
+                InstallAutomation::Windows(_) if verify => "Generate and verify autounattend.xml",
+                InstallAutomation::Windows(_) => "Generate autounattend.xml",
+                InstallAutomation::Ubuntu(_) if verify => {
+                    "Add and verify Ubuntu NoCloud user-data/meta-data"
+                }
+                InstallAutomation::Ubuntu(_) => "Add Ubuntu NoCloud user-data/meta-data",
+            };
+            actions.push(destructive(description));
+        }
 
         Ok(Self {
             id: Uuid::new_v4(),
@@ -169,7 +252,7 @@ impl OperationPlan {
             source: image.path.clone(),
             volume_label: volume_label.to_owned(),
             verify,
-            bytes_to_write: image.required_bytes,
+            bytes_to_write,
             temporary_bytes: image.temporary_bytes,
             actions,
         })
@@ -275,6 +358,9 @@ pub enum ErrorCode {
     ImageChanged,
     InsufficientCapacity,
     InvalidImage,
+    InvalidAutomationConfig,
+    InvalidAutoinstallConfig,
+    InvalidUnattendConfig,
     InvalidVolumeLabel,
     LockFailed,
     SignatureInvalid,
@@ -393,7 +479,7 @@ mod tests {
     fn plan_requires_exact_confirmation_and_fresh_device() {
         let device = usb();
         let image = image();
-        let plan = OperationPlan::create(&device, &image, "RUSTFUS", true).unwrap();
+        let plan = OperationPlan::create(&device, &image, "RUSTFUS", true, None).unwrap();
         assert_eq!(
             plan.revalidate(&device, &image, "erase").unwrap_err().code,
             ErrorCode::ConfirmationRequired
@@ -420,5 +506,76 @@ mod tests {
         assert!(validate_volume_label("RUSTFUS").is_ok());
         assert!(validate_volume_label("rustfus").is_err());
         assert!(validate_volume_label("TOO-LONG-LABEL").is_err());
+    }
+
+    #[test]
+    fn unattended_setup_is_planned_only_for_windows_media() {
+        let config = UnattendConfig {
+            custom_xml: None,
+            locale: "en-US".into(),
+            time_zone: "UTC".into(),
+            local_account: None,
+            local_account_password: String::new(),
+            auto_logon: false,
+            computer_name: None,
+            bypass_hardware_checks: false,
+            bypass_online_account: false,
+            skip_privacy_questions: false,
+        };
+        let mut source = image();
+        assert_eq!(
+            OperationPlan::create(
+                &usb(),
+                &source,
+                "RUSTFUS",
+                true,
+                Some(&InstallAutomation::Windows(config.clone())),
+            )
+            .unwrap_err()
+            .code,
+            ErrorCode::InvalidUnattendConfig
+        );
+
+        source.kind = ImageKind::WindowsInstaller;
+        let automation = InstallAutomation::Windows(config);
+        let plan =
+            OperationPlan::create(&usb(), &source, "RUSTFUS", true, Some(&automation)).unwrap();
+        assert!(plan.bytes_to_write > source.required_bytes);
+        assert!(
+            plan.actions
+                .iter()
+                .any(|action| action.description.contains("autounattend.xml"))
+        );
+    }
+
+    #[test]
+    fn ubuntu_autoinstall_switches_recognized_media_to_uefi_fat32() {
+        let mut source = image();
+        source.kind = ImageKind::UbuntuInstaller;
+        source.required_bytes = 2048;
+        let raw_plan = OperationPlan::create(&usb(), &source, "RUSTFUS", true, None).unwrap();
+        assert_eq!(raw_plan.mode, WriteMode::HybridRaw);
+        assert_eq!(raw_plan.bytes_to_write, source.size_bytes);
+
+        let config = InstallAutomation::Ubuntu(UbuntuAutoinstallConfig {
+            user_data: "#cloud-config\nautoinstall:\n  version: 1\n".into(),
+            meta_data: "instance-id: rustfus\n".into(),
+        });
+        source.required_bytes = 0;
+        assert_eq!(
+            OperationPlan::create(&usb(), &source, "RUSTFUS", true, Some(&config))
+                .unwrap_err()
+                .code,
+            ErrorCode::UnsupportedLargeFile
+        );
+        source.required_bytes = 2048;
+        let plan = OperationPlan::create(&usb(), &source, "RUSTFUS", true, Some(&config)).unwrap();
+        assert_eq!(plan.mode, WriteMode::UbuntuUefiFat32);
+        assert!(plan.bytes_to_write > source.required_bytes);
+        assert!(
+            plan.actions
+                .iter()
+                .any(|action| { action.description.contains("NoCloud user-data/meta-data") })
+        );
     }
 }
