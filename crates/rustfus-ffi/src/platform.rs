@@ -1,5 +1,6 @@
-//! Connects a [`Session`] to a freshly launched, elevated `rustfus-worker` over a private named
-//! pipe. Only the platform plumbing lives here; the conversation is in `session.rs`.
+//! Connects a [`Session`] to a freshly launched `rustfus-worker` over a private named pipe. The
+//! administrator front end launches the worker with its inherited token; only the platform
+//! plumbing lives here, while the conversation is in `session.rs`.
 
 use crate::session::{OpenRequest, PROGRESS_INTERVAL, Session};
 use rustfus_core::{ErrorCode, OperationError, OperationPlan};
@@ -32,8 +33,8 @@ fn validate_worker_path(worker_path: &Path) -> Result<(), OperationError> {
     Ok(())
 }
 
-/// Starts the elevated worker (UAC prompt), accepts its pipe connection and runs the
-/// handshake. Blocks until the user answers the prompt.
+/// Starts the worker with the front end's inherited administrator token, accepts its pipe
+/// connection and runs the handshake.
 ///
 /// # Errors
 ///
@@ -49,7 +50,7 @@ pub fn open_worker_session(
     let pipe_name = format!(r"\\.\pipe\rustfus-{}", Uuid::new_v4());
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let server = rustfus_windows::NamedPipeServer::create(&pipe_name)?;
-    let process_id = rustfus_windows::launch_elevated_worker(worker_path, &pipe_name, &token)?;
+    let process_id = rustfus_windows::launch_worker(worker_path, &pipe_name, &token)?;
     let pipe = server.accept(process_id)?;
     let read_pipe = pipe
         .try_clone()
@@ -74,7 +75,7 @@ pub fn open_worker_session(
     let _ = PROGRESS_INTERVAL;
     Err(OperationError::new(
         ErrorCode::UnsupportedPlatform,
-        "Elevated worker sessions are available only on Windows",
+        "Worker sessions are available only on Windows",
     ))
 }
 

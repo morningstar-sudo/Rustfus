@@ -568,7 +568,8 @@ internal static class Program
         lastLoggedBucket = -1;
         busy = true;
         progress.Value = 0;
-        status.Text = "Waiting for elevation and writing the USB media...";
+        status.Text = "Starting the worker, then re-verifying the ISO and USB device...";
+        SessionLog.Write("Launching worker with inherited administrator rights; it will re-verify the ISO and USB device before writing");
         UpdateControls();
         Thread thread = new Thread(delegate()
         {
@@ -589,6 +590,7 @@ internal static class Program
             session = s;
             SessionLog.Write("Worker accepted the plan: mode " + Bridge.Str(s.Plan, "mode") + ", " +
                              FormatSize(Bridge.Num(s.Plan, "bytes_to_write")) + " to write");
+            Ui(delegate { status.Text = "Worker connected; re-verifying the source image before writing..."; });
             while (true)
             {
                 Dictionary<string, object> ev = s.NextEvent();

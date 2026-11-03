@@ -1,3 +1,5 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod service;
 
 fn main() {
@@ -20,7 +22,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let pipe = rustfus_windows::connect_named_pipe(&pipe_name)?;
             return service::run_pipe(pipe, token);
         }
+        return Err("rustfus-worker requires both --pipe and --token on Windows".into());
     }
+    #[cfg(not(windows))]
     service::run_stdio()
 }
 

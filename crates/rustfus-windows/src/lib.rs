@@ -402,7 +402,7 @@ pub use media::{
 #[cfg(windows)]
 pub use platform::{
     NamedPipeServer, connect_named_pipe, enumerate_usb_devices, flush_volume,
-    launch_elevated_worker, lock_target_volumes, open_physical_disk, open_source_image,
+    launch_worker, lock_target_volumes, open_physical_disk, open_source_image,
     path_is_on_disk, update_disk_properties,
 };
 

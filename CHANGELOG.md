@@ -18,6 +18,8 @@ All notable changes to Rustfus are documented here.
 
 ### Changed
 
+- Rustfus now requests administrator rights when the front end starts. The isolated worker inherits
+  that token, so starting an operation no longer triggers a second elevation request.
 - Release ZIPs no longer include repository Markdown files; legal notices remain as `LICENSE` and `THIRD-PARTY-NOTICES.txt`.
 - The C runtime is linked statically, so the package runs on machines without the Visual C++ Redistributable.
 - Image analysis is multi-core: the image fingerprint is a SHA-256 tree hash over 4 MiB chunks (so it is no longer the plain SHA-256 of the ISO), and hybrid images are read once for both the fingerprint and the EFI boot-loader check. Analysing a 4 GB hybrid ISO went from about 9 s to about 1.4 s.
@@ -28,6 +30,7 @@ All notable changes to Rustfus are documented here.
 
 ### Fixed
 
+- Elevated-worker startup can no longer leave the UI waiting forever: named-pipe connection now has a 30-second timeout, a Windows worker without authenticated pipe arguments exits immediately, and release workers no longer open a console window.
 - Windows ISO analysis: ISOs attach as CD-ROM devices (not physical drives) and need `GET_INFO` access to resolve, so they now mount, are recognised by `bootmgr` / `sources\boot.wim`, and report their real error instead of falling back to the hybrid-image message.
 - The FAT32 formatter wrote the 32-byte volume-label entry straight to the disk. A raw disk only accepts whole-sector transfers, so formatting a real (or virtual) disk failed with `ERROR_INVALID_PARAMETER`. It now writes the whole first sector of the root directory, and unit tests use a target that rejects partial-sector transfers like a raw disk does.
 - Raw-image read-back verification read only the image bytes of the last block, which fails on a raw disk when the image length is not a multiple of the sector size. It now reads the zero padding too and hashes only the image bytes.

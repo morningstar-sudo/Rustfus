@@ -1,6 +1,6 @@
 use rustfus_core::{
     ErrorCode, Fingerprint, ImageAnalysis, InstallAutomation, OperationError, OperationEvent,
-    OperationPlan,
+    OperationPhase, OperationPlan,
 };
 use rustfus_protocol::{Envelope, WorkerRequest, WorkerResponse, read_frame, write_frame};
 use rustfus_windows::{CancellationToken, StreamProgress};
@@ -216,6 +216,16 @@ fn spawn_operation(
 ) {
     std::thread::spawn(move || {
         let plan_id = operation.plan.id;
+        let _ = send_response(
+            &writer,
+            request_id,
+            WorkerResponse::Event {
+                plan_id,
+                event: OperationEvent::PhaseChanged {
+                    phase: OperationPhase::Analyze,
+                },
+            },
+        );
         let result = execute_operation(&operation, &confirmation, &cancellation, |progress| {
             let event = OperationEvent::Progress {
                 phase: progress.phase,

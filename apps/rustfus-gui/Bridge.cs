@@ -189,7 +189,8 @@ internal static class Bridge
         return Str(Take(status, json), "hash");
     }
 
-    /// Launches the elevated worker (UAC), prepares a plan and starts the operation. Blocks.
+    /// Launches the worker with the GUI's administrator token, prepares a plan and starts the
+    /// operation. Blocks.
     public static BridgeSession StartSession(string deviceId, string imageId, string volumeLabel,
         bool verify, string automationJson, string confirmation, string workerPath)
     {

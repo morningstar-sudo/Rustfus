@@ -46,14 +46,17 @@ const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
 const PIPE_TYPE_BYTE: u32 = 0;
 const PIPE_READMODE_BYTE: u32 = 0;
 const PIPE_WAIT: u32 = 0;
+const PIPE_NOWAIT: u32 = 1;
 const PIPE_REJECT_REMOTE_CLIENTS: u32 = 0x0000_0008;
 const ERROR_PIPE_CONNECTED: u32 = 535;
+const ERROR_PIPE_LISTENING: u32 = 536;
+const WORKER_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const TOKEN_QUERY: u32 = 0x0008;
 const TOKEN_USER: u32 = 1;
 const SDDL_REVISION_1: u32 = 1;
 const SEE_MASK_NOCLOSEPROCESS: u32 = 0x0000_0040;
 const SEE_MASK_NOASYNC: u32 = 0x0000_0100;
-const SW_SHOWNORMAL: i32 = 1;
+const SW_HIDE: i32 = 0;
 const ERROR_FILE_NOT_FOUND: i32 = 2;
 const ERROR_INVALID_FUNCTION: i32 = 1;
 const ERROR_NOT_SUPPORTED: i32 = 50;
@@ -206,6 +209,12 @@ unsafe extern "system" {
     ) -> Handle;
     fn ConnectNamedPipe(pipe: Handle, overlapped: *mut c_void) -> Bool;
     fn GetNamedPipeClientProcessId(pipe: Handle, client_process_id: *mut u32) -> Bool;
+    fn SetNamedPipeHandleState(
+        pipe: Handle,
+        mode: *mut u32,
+        maximum_collection_count: *mut u32,
+        collection_data_timeout: *mut u32,
+    ) -> Bool;
     fn WaitNamedPipeW(name: *const u16, timeout: u32) -> Bool;
     fn GetProcessId(process: Handle) -> u32;
     fn IsNativeVhdBoot(is_native_vhd_boot: *mut Bool) -> Bool;
@@ -553,7 +562,7 @@ impl NamedPipeServer {
             CreateNamedPipeW(
                 name.as_ptr(),
                 PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 1,
                 1024 * 1024,
                 1024 * 1024,
@@ -574,8 +583,39 @@ impl NamedPipeServer {
             .file
             .take()
             .ok_or_else(|| OperationError::new(ErrorCode::Internal, "Pipe was already accepted"))?;
-        let connected = unsafe { ConnectNamedPipe(file.as_raw_handle().cast(), ptr::null_mut()) };
-        if connected == 0 && unsafe { GetLastError() } != ERROR_PIPE_CONNECTED {
+        let started = Instant::now();
+        loop {
+            let connected = unsafe {
+                ConnectNamedPipe(file.as_raw_handle().cast(), ptr::null_mut())
+            };
+            if connected != 0 {
+                break;
+            }
+            let error = unsafe { GetLastError() };
+            if error == ERROR_PIPE_CONNECTED {
+                break;
+            }
+            if error != ERROR_PIPE_LISTENING {
+                return Err(io_error(io::Error::from_raw_os_error(error as i32)));
+            }
+            if started.elapsed() >= WORKER_CONNECT_TIMEOUT {
+                return Err(OperationError::new(
+                    ErrorCode::Io,
+                    "The elevated worker did not connect within 30 seconds",
+                ));
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        let mut blocking_mode = PIPE_WAIT;
+        let blocking = unsafe {
+            SetNamedPipeHandleState(
+                file.as_raw_handle().cast(),
+                &mut blocking_mode,
+                ptr::null_mut(),
+                ptr::null_mut(),
+            )
+        };
+        if blocking == 0 {
             return Err(io_error(io::Error::last_os_error()));
         }
         let mut client_process_id = 0_u32;
@@ -610,7 +650,7 @@ pub fn connect_named_pipe(name: &str) -> Result<File, OperationError> {
     open_handle_with_share(name, GENERIC_READ | GENERIC_WRITE, 0).map_err(io_error)
 }
 
-pub fn launch_elevated_worker(
+pub fn launch_worker(
     worker_path: &Path,
     pipe_name: &str,
     token: &str,
@@ -618,7 +658,9 @@ pub fn launch_elevated_worker(
     let worker = wide_null(worker_path.to_str().ok_or_else(|| {
         OperationError::new(ErrorCode::Internal, "Worker path is not valid Unicode")
     })?);
-    let verb = wide_null("runas");
+    // Rustfus.exe requests requireAdministrator in its manifest. Use the normal executable verb
+    // so the worker inherits that token without presenting a second elevation prompt.
+    let verb = wide_null("open");
     let parameters = wide_null(&format!(
         "--pipe {} --token {}",
         quote_argument(pipe_name),
@@ -632,7 +674,7 @@ pub fn launch_elevated_worker(
         file: worker.as_ptr(),
         parameters: parameters.as_ptr(),
         directory: ptr::null(),
-        show: SW_SHOWNORMAL,
+        show: SW_HIDE,
         instance: ptr::null_mut(),
         id_list: ptr::null_mut(),
         class: ptr::null(),
