@@ -9,8 +9,8 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-/// Full Schneegans configurations may embed scripts and other resources in XML. Keep a strict
-/// allocation bound while allowing the 2 MiB imported-file limit plus JSON/UTF-8 escaping.
+/// Complete visual-editor configurations may embed commands and additional component settings.
+/// Keep a strict allocation bound while allowing the 2 MiB XML limit plus JSON/UTF-8 escaping.
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -11,8 +11,8 @@ use std::fmt::Write as _;
 #[allow(clippy::struct_excessive_bools)]
 #[serde(default)]
 pub struct UnattendConfig {
-    /// Complete XML imported from Schneegans' full generator. When present, the guided fields
-    /// below are deliberately ignored so new upstream options work without a Rustfus update.
+    /// Complete XML produced by the Rustfus visual editor. When present, the legacy guided fields
+    /// below are deliberately ignored so the editor can expose new options independently.
     pub custom_xml: Option<String>,
     pub locale: String,
     pub time_zone: String,
@@ -175,7 +175,7 @@ const MAX_CUSTOM_XML_BYTES: usize = 2 * 1024 * 1024;
 fn validate_custom_xml(xml: &str) -> Result<(), OperationError> {
     if xml.is_empty() || xml.len() > MAX_CUSTOM_XML_BYTES || xml.contains('\0') {
         return Err(invalid(
-            "The imported autounattend.xml must be valid UTF-8 and no larger than 2 MiB",
+            "autounattend.xml must be valid UTF-8 and no larger than 2 MiB",
         ));
     }
     let normalized = xml.trim_start_matches(['\u{feff}', ' ', '\t', '\r', '\n']);
@@ -191,7 +191,7 @@ fn validate_custom_xml(xml: &str) -> Result<(), OperationError> {
         || !lower.contains("</unattend>")
     {
         return Err(invalid(
-            "The imported file is not a Microsoft autounattend.xml document",
+            "The configuration is not a Microsoft autounattend.xml document",
         ));
     }
     Ok(())
@@ -368,10 +368,10 @@ mod tests {
     }
 
     #[test]
-    fn complete_schneegans_xml_is_preserved_without_losing_extensions() {
+    fn complete_custom_xml_is_preserved_without_losing_extensions() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
-  <Extensions xmlns="https://schneegans.de/windows/unattend-generator/">
+  <Extensions xmlns="urn:rustfus:unattend-extensions">
     <File path="C:\Windows\Setup\Scripts\specialize.ps1">custom</File>
   </Extensions>
 </unattend>

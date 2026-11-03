@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Media;
 
 internal sealed class UbuntuConfigDialog : Window
@@ -69,17 +70,24 @@ internal sealed class UbuntuConfigDialog : Window
 
     public UbuntuConfigDialog(Window owner, string existingUserData, string existingMetaData)
     {
-        Owner = owner;
+        if (owner.IsVisible) { Owner = owner; }
+        CopyThemeResources(owner);
         Title = "Ubuntu autoinstall configuration";
-        Width = 920;
+        Width = 980;
         Height = 760;
         MinWidth = 760;
         MinHeight = 600;
-        WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        Background = ResourceBrush(owner, "Bg", Brushes.White);
-        Foreground = ResourceBrush(owner, "Text", Brushes.Black);
+        WindowStartupLocation = owner.IsVisible
+            ? WindowStartupLocation.CenterOwner
+            : WindowStartupLocation.CenterScreen;
+        FontFamily = owner.FontFamily;
+        FontSize = owner.FontSize;
+        UseLayoutRounding = true;
+        SetResourceReference(BackgroundProperty, "Bg");
+        SetResourceReference(ForegroundProperty, "Text");
+        SourceInitialized += delegate { ApplyWindowChrome(); };
 
-        Grid root = new Grid { Margin = new Thickness(18) };
+        Grid root = new Grid { Margin = new Thickness(24, 16, 24, 20) };
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
@@ -99,6 +107,7 @@ internal sealed class UbuntuConfigDialog : Window
         Button generate = new Button { Content = "Generate / refresh YAML", MinWidth = 180, Height = 34, Margin = new Thickness(0, 0, 8, 0) };
         Button cancel = new Button { Content = "Cancel", Width = 100, Height = 34, Margin = new Thickness(0, 0, 8, 0), IsCancel = true };
         Button use = new Button { Content = "Use this config", Width = 140, Height = 34, IsDefault = true };
+        use.SetResourceReference(StyleProperty, "Primary");
         generate.Click += delegate { GenerateYaml(); tabs.SelectedIndex = 5; };
         use.Click += delegate { Accept(); };
         Grid.SetColumn(generate, 0);
@@ -510,7 +519,7 @@ internal sealed class UbuntuConfigDialog : Window
     }
     private static TextBlock Heading(string text)
     {
-        return new TextBlock { Text = text, FontSize = 16, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 12, 0, 8) };
+        return new TextBlock { Text = text, FontSize = 14, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 12, 0, 8) };
     }
     private static void AddField(Panel panel, string label, Control control, string help)
     {
@@ -527,9 +536,25 @@ internal sealed class UbuntuConfigDialog : Window
         return new ScrollViewer { Content = child, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
     }
     private static TabItem Tab(string header, UIElement content) { return new TabItem { Header = header, Content = content }; }
-    private static Brush ResourceBrush(Window owner, string key, Brush fallback)
+    private void ApplyWindowChrome()
     {
-        object value = owner.TryFindResource(key);
-        return value as Brush ?? fallback;
+        SolidColorBrush background = TryFindResource("Bg") as SolidColorBrush;
+        bool darkTheme = background != null &&
+            (background.Color.R + background.Color.G + background.Color.B) < 384;
+        int enabled = darkTheme ? 1 : 0;
+        IntPtr handle = new WindowInteropHelper(this).Handle;
+        if (handle != IntPtr.Zero)
+        {
+            Native.DwmSetWindowAttribute(handle, 20, ref enabled, 4);
+            Native.DwmSetWindowAttribute(handle, 19, ref enabled, 4);
+        }
+    }
+
+    private void CopyThemeResources(Window owner)
+    {
+        foreach (object key in owner.Resources.Keys)
+        {
+            Resources[key] = owner.Resources[key];
+        }
     }
 }

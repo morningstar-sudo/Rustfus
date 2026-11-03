@@ -76,8 +76,6 @@ internal static class Palette
 
 internal static class Program
 {
-    private const string FullUnattendGeneratorUrl =
-        "https://schneegans.de/windows/unattend-generator/";
     private const string UbuntuAutoinstallGeneratorUrl =
         "https://github.com/covertsh/ubuntu-autoinstall-generator/";
     private const int MaximumAutomationConfigBytes = 2 * 1024 * 1024;
@@ -109,23 +107,10 @@ internal static class Program
     private static CheckBox verify;
     private static Border windowsOptionsCard;
     private static CheckBox unattend;
-    private static CheckBox unattendFull;
-    private static Grid unattendFullOptions;
-    private static TextBox unattendFullPath;
-    private static Button openUnattendGenerator;
-    private static Button browseUnattend;
-    private static Grid unattendOptions;
-    private static ComboBox unattendLocale;
-    private static ComboBox unattendTimeZone;
-    private static TextBox unattendComputer;
-    private static CheckBox unattendCreateAccount;
-    private static Grid unattendAccountOptions;
-    private static TextBox unattendAccount;
-    private static PasswordBox unattendPassword;
-    private static CheckBox unattendAutoLogon;
-    private static CheckBox unattendHardware;
-    private static CheckBox unattendOnline;
-    private static CheckBox unattendPrivacy;
+    private static Grid windowsConfigOptions;
+    private static Button configureWindows;
+    private static TextBlock windowsConfigSummary;
+    private static string windowsGeneratedXml;
     private static Border ubuntuOptionsCard;
     private static CheckBox ubuntuAutoinstall;
     private static StackPanel ubuntuAutoinstallOptions;
@@ -263,15 +248,7 @@ internal static class Program
         windowsOptionsCard.Visibility = demo || windowsImage ? Visibility.Visible : Visibility.Collapsed;
         unattend.IsEnabled = !busy && (demo || windowsImage);
         bool unattendedEnabled = unattend.IsEnabled && unattend.IsChecked == true;
-        bool complete = unattendedEnabled && unattendFull.IsChecked == true;
-        unattendFull.IsEnabled = unattendedEnabled;
-        unattendFullOptions.Visibility = complete ? Visibility.Visible : Visibility.Collapsed;
-        unattendFullOptions.IsEnabled = complete;
-        unattendOptions.Visibility = complete ? Visibility.Collapsed : Visibility.Visible;
-        unattendOptions.IsEnabled = unattendedEnabled && !complete;
-        bool accountEnabled = unattendOptions.IsEnabled && unattendCreateAccount.IsChecked == true;
-        unattendAccountOptions.IsEnabled = accountEnabled;
-        unattendAutoLogon.IsEnabled = accountEnabled;
+        windowsConfigOptions.IsEnabled = unattendedEnabled;
         ubuntuOptionsCard.Visibility = ubuntuImage ? Visibility.Visible : Visibility.Collapsed;
         ubuntuAutoinstall.IsEnabled = !busy && ubuntuImage && ubuntuAutoinstallSupported;
         ubuntuAutoinstallOptions.IsEnabled = ubuntuAutoinstall.IsEnabled &&
@@ -279,100 +256,6 @@ internal static class Program
         bool visualUbuntu = ubuntuVisualMode.IsChecked == true;
         ubuntuVisualOptions.Visibility = visualUbuntu ? Visibility.Visible : Visibility.Collapsed;
         ubuntuImportOptions.Visibility = visualUbuntu ? Visibility.Collapsed : Visibility.Visible;
-    }
-
-    private static string DefaultAccountName()
-    {
-        string name = Environment.UserName == null ? "User" : Environment.UserName.Trim();
-        return ValidAccountName(name) ? name : "User";
-    }
-
-    private static bool ValidAccountName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name) || name != name.Trim() || name.Length > 20 ||
-            name.EndsWith(".", StringComparison.Ordinal)) { return false; }
-        if (name.IndexOfAny(new[] { '/', '\\', '[', ']', ':', ';', '|', '=', ',', '+', '*', '?',
-                                   '<', '>', '"', '%' }) >= 0) { return false; }
-        string[] reserved = { "administrator", "guest", "defaultaccount", "system",
-                              "network service", "local service", "none", "wdagutilityaccount" };
-        foreach (string value in reserved)
-        {
-            if (string.Equals(name, value, StringComparison.OrdinalIgnoreCase)) { return false; }
-        }
-        foreach (char character in name)
-        {
-            if (char.IsControl(character)) { return false; }
-        }
-        return true;
-    }
-
-    private static bool ValidComputerName(string name)
-    {
-        if (name.Length == 0) { return true; }
-        if (name.Length > 15 || name[0] == '-' || name[name.Length - 1] == '-') { return false; }
-        bool allDigits = true;
-        foreach (char character in name)
-        {
-            if (!(character >= 'A' && character <= 'Z') &&
-                !(character >= 'a' && character <= 'z') &&
-                !(character >= '0' && character <= '9') && character != '-') { return false; }
-            if (character < '0' || character > '9') { allDigits = false; }
-        }
-        return !allDigits;
-    }
-
-    private static string SelectedValue(ComboBox combo)
-    {
-        ComboBoxItem item = combo.SelectedItem as ComboBoxItem;
-        return item == null ? "" : Convert.ToString(item.Tag, CultureInfo.InvariantCulture);
-    }
-
-    private static void FillUnattendChoices()
-    {
-        string currentLocale = CultureInfo.CurrentCulture.Name;
-        if (string.IsNullOrEmpty(currentLocale)) { currentLocale = "en-US"; }
-        List<string> locales = new List<string>();
-        foreach (CultureInfo culture in CultureInfo.GetCultures(CultureTypes.SpecificCultures))
-        {
-            if (!string.IsNullOrEmpty(culture.Name) && !locales.Contains(culture.Name))
-            {
-                locales.Add(culture.Name);
-            }
-        }
-        locales.Sort(StringComparer.OrdinalIgnoreCase);
-        foreach (string name in locales)
-        {
-            CultureInfo culture = CultureInfo.GetCultureInfo(name);
-            ComboBoxItem item = new ComboBoxItem();
-            item.Tag = name;
-            item.Content = culture.DisplayName + " (" + name + ")";
-            unattendLocale.Items.Add(item);
-            if (string.Equals(name, currentLocale, StringComparison.OrdinalIgnoreCase))
-            {
-                unattendLocale.SelectedItem = item;
-            }
-        }
-        if (unattendLocale.SelectedIndex < 0 && unattendLocale.Items.Count > 0)
-        {
-            unattendLocale.SelectedIndex = 0;
-        }
-
-        string currentZone = TimeZoneInfo.Local.Id;
-        foreach (TimeZoneInfo zone in TimeZoneInfo.GetSystemTimeZones())
-        {
-            ComboBoxItem item = new ComboBoxItem();
-            item.Tag = zone.Id;
-            item.Content = zone.DisplayName;
-            unattendTimeZone.Items.Add(item);
-            if (string.Equals(zone.Id, currentZone, StringComparison.OrdinalIgnoreCase))
-            {
-                unattendTimeZone.SelectedItem = item;
-            }
-        }
-        if (unattendTimeZone.SelectedIndex < 0 && unattendTimeZone.Items.Count > 0)
-        {
-            unattendTimeZone.SelectedIndex = 0;
-        }
     }
 
     private static string JsonString(string value)
@@ -488,71 +371,19 @@ internal static class Program
                 "\"meta_data\":" + JsonString(metaData) + "}}";
         }
         if (unattend.IsChecked != true) { return ""; }
-        if (unattendFull.IsChecked == true)
-        {
-            string path = unattendFullPath.Text.Trim();
-            if (!File.Exists(path))
-            {
-                throw new InvalidOperationException(
-                    "Generate and import an autounattend.xml file before starting."
-                );
-            }
-            string xml = ReadAutomationText(path, "The imported autounattend.xml");
-            if (xml.IndexOf("<!DOCTYPE", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                throw new InvalidOperationException("DOCTYPE declarations are not allowed in autounattend.xml.");
-            }
-            XmlDocument document = new XmlDocument();
-            document.PreserveWhitespace = true;
-            document.XmlResolver = null;
-            try { document.LoadXml(xml); }
-            catch (XmlException ex)
-            {
-                throw new InvalidOperationException("The imported autounattend.xml is malformed: " + ex.Message);
-            }
-            if (document.DocumentElement == null || document.DocumentElement.LocalName != "unattend" ||
-                document.DocumentElement.NamespaceURI != "urn:schemas-microsoft-com:unattend")
-            {
-                throw new InvalidOperationException(
-                    "The imported file is not a Microsoft autounattend.xml document."
-                );
-            }
-            return "{\"platform\":\"windows\",\"config\":{" +
-                "\"custom_xml\":" + JsonString(xml) + "}}";
-        }
-        string locale = SelectedValue(unattendLocale);
-        string timeZone = SelectedValue(unattendTimeZone);
-        if (locale.Length == 0 || timeZone.Length == 0)
-        {
-            throw new InvalidOperationException("Select both a locale and a Windows time zone.");
-        }
-        bool createAccount = unattendCreateAccount.IsChecked == true;
-        string account = unattendAccount.Text.Trim();
-        if (createAccount && !ValidAccountName(account))
+        if (string.IsNullOrEmpty(windowsGeneratedXml))
         {
             throw new InvalidOperationException(
-                "Enter a valid local account name (1-20 characters; Windows reserved names and / \\ [ ] : ; | = , + * ? < > \" % are not allowed)."
+                "Open the full Windows configuration and choose Use this config before starting."
             );
         }
-        string computer = unattendComputer.Text.Trim();
-        if (!ValidComputerName(computer))
+        if (Encoding.UTF8.GetByteCount(windowsGeneratedXml) > MaximumAutomationConfigBytes)
         {
-            throw new InvalidOperationException(
-                "The computer name must be 1-15 letters, digits or hyphens, and cannot be all digits. Leave it blank for an automatic name."
-            );
+            throw new InvalidOperationException("The generated autounattend.xml is larger than 2 MiB.");
         }
+        WindowsConfigDialog.ValidateXml(windowsGeneratedXml);
         return "{\"platform\":\"windows\",\"config\":{" +
-            "\"custom_xml\":null," +
-            "\"locale\":" + JsonString(locale) + "," +
-            "\"time_zone\":" + JsonString(timeZone) + "," +
-            "\"local_account\":" + (createAccount ? JsonString(account) : "null") + "," +
-            "\"local_account_password\":" + JsonString(createAccount ? unattendPassword.Password : "") + "," +
-            "\"auto_logon\":" + (createAccount && unattendAutoLogon.IsChecked == true ? "true" : "false") + "," +
-            "\"computer_name\":" + (computer.Length > 0 ? JsonString(computer) : "null") + "," +
-            "\"bypass_hardware_checks\":" + (unattendHardware.IsChecked == true ? "true" : "false") + "," +
-            "\"bypass_online_account\":" + (unattendOnline.IsChecked == true ? "true" : "false") + "," +
-            "\"skip_privacy_questions\":" + (unattendPrivacy.IsChecked == true ? "true" : "false") +
-            "}}";
+            "\"custom_xml\":" + JsonString(windowsGeneratedXml) + "}}";
     }
 
     private static string FormatSize(double bytes)
@@ -708,8 +539,7 @@ internal static class Program
                 if (ubuntuVisualMode.IsChecked == true) { configureUbuntu.Focus(); }
                 else { browseUbuntuUserData.Focus(); }
             }
-            else if (unattendFull.IsChecked == true) { browseUnattend.Focus(); }
-            else { unattendAccount.Focus(); }
+            else { configureWindows.Focus(); }
             return;
         }
         if (!ConfirmErase())
@@ -922,6 +752,26 @@ internal static class Program
             SessionLog.Write("Self-test failed: Ubuntu password hashing: " + ex.Message);
             return ExitSelfTestLibrary;
         }
+        try
+        {
+            Window owner = LoadMainWindow();
+            UbuntuConfigDialog ubuntuDialog = new UbuntuConfigDialog(owner, null, null);
+            ubuntuDialog.Close();
+            WindowsConfigDialog windowsDialog = new WindowsConfigDialog(owner, null);
+            WindowsConfigDialog.ValidateXml(windowsDialog.GeneratedXml);
+            if (windowsDialog.GeneratedXml.IndexOf("Microsoft-Windows-Setup", StringComparison.Ordinal) < 0 ||
+                windowsDialog.GeneratedXml.IndexOf("Microsoft-Windows-Shell-Setup", StringComparison.Ordinal) < 0)
+            {
+                throw new InvalidOperationException("Windows editor omitted required setup components");
+            }
+            windowsDialog.Close();
+            owner.Close();
+        }
+        catch (Exception ex)
+        {
+            SessionLog.Write("Self-test failed: automation configuration dialogs: " + ex.Message);
+            return ExitSelfTestLibrary;
+        }
         string worker = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "rustfus-worker.exe");
         if (!File.Exists(worker))
         {
@@ -979,23 +829,9 @@ internal static class Program
         verify = Find<CheckBox>("verify");
         windowsOptionsCard = Find<Border>("windowsOptionsCard");
         unattend = Find<CheckBox>("unattend");
-        unattendFull = Find<CheckBox>("unattendFull");
-        unattendFullOptions = Find<Grid>("unattendFullOptions");
-        unattendFullPath = Find<TextBox>("unattendFullPath");
-        openUnattendGenerator = Find<Button>("openUnattendGenerator");
-        browseUnattend = Find<Button>("browseUnattend");
-        unattendOptions = Find<Grid>("unattendOptions");
-        unattendLocale = Find<ComboBox>("unattendLocale");
-        unattendTimeZone = Find<ComboBox>("unattendTimeZone");
-        unattendComputer = Find<TextBox>("unattendComputer");
-        unattendCreateAccount = Find<CheckBox>("unattendCreateAccount");
-        unattendAccountOptions = Find<Grid>("unattendAccountOptions");
-        unattendAccount = Find<TextBox>("unattendAccount");
-        unattendPassword = Find<PasswordBox>("unattendPassword");
-        unattendAutoLogon = Find<CheckBox>("unattendAutoLogon");
-        unattendHardware = Find<CheckBox>("unattendHardware");
-        unattendOnline = Find<CheckBox>("unattendOnline");
-        unattendPrivacy = Find<CheckBox>("unattendPrivacy");
+        windowsConfigOptions = Find<Grid>("windowsConfigOptions");
+        configureWindows = Find<Button>("configureWindows");
+        windowsConfigSummary = Find<TextBlock>("windowsConfigSummary");
         ubuntuOptionsCard = Find<Border>("ubuntuOptionsCard");
         ubuntuAutoinstall = Find<CheckBox>("ubuntuAutoinstall");
         ubuntuAutoinstallOptions = Find<StackPanel>("ubuntuAutoinstallOptions");
@@ -1017,19 +853,12 @@ internal static class Program
         browse = Find<Button>("browse");
         analyze = Find<Button>("analyze");
 
-        unattendAccount.Text = DefaultAccountName();
-        FillUnattendChoices();
-
         Find<Button>("themeToggle").Click += delegate { dark = !dark; ApplyTheme(); };
         Find<Button>("exportLog").Click += delegate { ExportLog(); };
         refresh.Click += delegate { RefreshDevices(); };
         analyze.Click += delegate { AnalyzeImage(); };
         unattend.Checked += delegate { UpdateControls(); };
         unattend.Unchecked += delegate { UpdateControls(); };
-        unattendFull.Checked += delegate { UpdateControls(); };
-        unattendFull.Unchecked += delegate { UpdateControls(); };
-        unattendCreateAccount.Checked += delegate { UpdateControls(); };
-        unattendCreateAccount.Unchecked += delegate { UpdateControls(); };
         ubuntuAutoinstall.Checked += delegate { UpdateControls(); };
         ubuntuAutoinstall.Unchecked += delegate { UpdateControls(); };
         ubuntuVisualMode.Checked += delegate { UpdateControls(); };
@@ -1050,26 +879,16 @@ internal static class Program
                 status.Text = "Ubuntu full visual configuration is ready.";
             }
         };
-        openUnattendGenerator.Click += delegate
+        configureWindows.Click += delegate
         {
-            try
+            WindowsConfigDialog dialog = new WindowsConfigDialog(win, windowsGeneratedXml);
+            if (dialog.ShowDialog() == true)
             {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
-                    FullUnattendGeneratorUrl) { UseShellExecute = true });
-            }
-            catch (Exception ex)
-            {
-                status.Text = "Could not open the full generator: " + ex.Message;
-            }
-        };
-        browseUnattend.Click += delegate
-        {
-            OpenFileDialog dialog = new OpenFileDialog();
-            dialog.Filter = "Windows unattended configuration (autounattend.xml)|autounattend.xml|XML files (*.xml)|*.xml|All files (*.*)|*.*";
-            if (dialog.ShowDialog(win) == true)
-            {
-                unattendFullPath.Text = dialog.FileName;
-                status.Text = "Full Schneegans configuration selected.";
+                windowsGeneratedXml = dialog.GeneratedXml;
+                windowsConfigSummary.Text = "Configured: " +
+                    FormatSize(Encoding.UTF8.GetByteCount(windowsGeneratedXml)) +
+                    " autounattend.xml; reopen the editor to review it or change options";
+                status.Text = "Windows full visual configuration is ready.";
             }
         };
         openUbuntuGenerator.Click += delegate
