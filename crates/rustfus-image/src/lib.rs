@@ -61,7 +61,7 @@ pub fn copy_file_verified(
     source: &Path,
     destination: &Path,
     verify: bool,
-    on_bytes: impl FnMut(u64),
+    on_bytes: impl FnMut(u64) -> Result<(), OperationError>,
 ) -> Result<[u8; 32], OperationError> {
     let mut buffer = vec![0_u8; STREAM_BUFFER_BYTES];
     copy_file_verified_with_buffer(source, destination, verify, &mut buffer, on_bytes)
@@ -72,7 +72,7 @@ pub fn copy_file_verified_with_buffer(
     destination: &Path,
     verify: bool,
     buffer: &mut [u8],
-    mut on_bytes: impl FnMut(u64),
+    mut on_bytes: impl FnMut(u64) -> Result<(), OperationError>,
 ) -> Result<[u8; 32], OperationError> {
     if buffer.is_empty() {
         return Err(OperationError::new(
@@ -93,7 +93,11 @@ pub fn copy_file_verified_with_buffer(
         }
         output.write_all(&buffer[..count]).map_err(io_error)?;
         hasher.update(&buffer[..count]);
-        on_bytes(count as u64);
+        if let Err(error) = on_bytes(count as u64) {
+            drop(output);
+            let _ = fs::remove_file(destination);
+            return Err(error);
+        }
     }
     output.flush().map_err(io_error)?;
     let expected: [u8; 32] = hasher.finalize().into();
@@ -223,6 +227,24 @@ pub fn analyze_mounted_windows_iso(
     iso_path: &Path,
     mounted_root: &Path,
 ) -> Result<WindowsMediaManifest, OperationError> {
+    build_mounted_windows_manifest(iso_path, mounted_root, None)
+}
+
+/// Re-inspects a mounted Windows ISO whose source file is held open with write/delete sharing
+/// denied and whose fingerprint was already verified by the caller.
+pub fn inspect_verified_windows_iso(
+    iso_path: &Path,
+    mounted_root: &Path,
+    verified_fingerprint: Fingerprint,
+) -> Result<WindowsMediaManifest, OperationError> {
+    build_mounted_windows_manifest(iso_path, mounted_root, Some(verified_fingerprint))
+}
+
+fn build_mounted_windows_manifest(
+    iso_path: &Path,
+    mounted_root: &Path,
+    verified_fingerprint: Option<Fingerprint>,
+) -> Result<WindowsMediaManifest, OperationError> {
     let bootmgr = required_child(mounted_root, &["bootmgr"])?;
     let bootx64 = required_child(mounted_root, &["efi", "boot", "bootx64.efi"])?;
     let boot_wim = required_child(mounted_root, &["sources", "boot.wim"])?;
@@ -319,7 +341,10 @@ pub fn analyze_mounted_windows_iso(
         kind: ImageKind::WindowsInstaller,
         architecture: Architecture::X86_64,
         size_bytes: iso_metadata.len(),
-        fingerprint: fingerprint_image_file(iso_path, false)?.fingerprint,
+        fingerprint: match verified_fingerprint {
+            Some(fingerprint) => fingerprint,
+            None => fingerprint_image_file(iso_path, false)?.fingerprint,
+        },
         required_bytes: required_bytes.saturating_add(64 * 1024 * 1024),
         temporary_bytes,
         warnings: vec![
@@ -340,6 +365,24 @@ pub fn analyze_mounted_windows_iso(
 pub fn analyze_mounted_ubuntu_iso(
     iso_path: &Path,
     mounted_root: &Path,
+) -> Result<UbuntuMediaManifest, OperationError> {
+    build_mounted_ubuntu_manifest(iso_path, mounted_root, None)
+}
+
+/// Re-inspects a mounted Ubuntu ISO whose source file is held open with write/delete sharing
+/// denied and whose fingerprint was already verified by the caller.
+pub fn inspect_verified_ubuntu_iso(
+    iso_path: &Path,
+    mounted_root: &Path,
+    verified_fingerprint: Fingerprint,
+) -> Result<UbuntuMediaManifest, OperationError> {
+    build_mounted_ubuntu_manifest(iso_path, mounted_root, Some(verified_fingerprint))
+}
+
+fn build_mounted_ubuntu_manifest(
+    iso_path: &Path,
+    mounted_root: &Path,
+    verified_fingerprint: Option<Fingerprint>,
 ) -> Result<UbuntuMediaManifest, OperationError> {
     let info_path = required_child(mounted_root, &[".disk", "info"])?;
     let bootx64 = required_child(mounted_root, &["efi", "boot", "bootx64.efi"])?;
@@ -410,7 +453,10 @@ pub fn analyze_mounted_ubuntu_iso(
         kind: ImageKind::UbuntuInstaller,
         architecture: Architecture::X86_64,
         size_bytes: iso_metadata.len(),
-        fingerprint: fingerprint_image_file(iso_path, false)?.fingerprint,
+        fingerprint: match verified_fingerprint {
+            Some(fingerprint) => fingerprint,
+            None => fingerprint_image_file(iso_path, false)?.fingerprint,
+        },
         required_bytes,
         temporary_bytes: 0,
         warnings,
@@ -574,6 +620,9 @@ mod tests {
         assert_eq!(manifest.analysis.kind, ImageKind::WindowsInstaller);
         assert!(matches!(manifest.install_image, InstallImage::Esd { .. }));
         assert_eq!(manifest.files.len(), 5);
+        let verified = Fingerprint([0xA5; 32]);
+        let reused = inspect_verified_windows_iso(&iso, &root, verified).unwrap();
+        assert_eq!(reused.analysis.fingerprint, verified);
     }
 
     #[test]
@@ -599,6 +648,9 @@ mod tests {
         assert_eq!(manifest.analysis.kind, ImageKind::UbuntuInstaller);
         assert_eq!(manifest.files.len(), 4);
         assert!(manifest.analysis.required_bytes > 64 * 1024 * 1024);
+        let verified = Fingerprint([0x5A; 32]);
+        let reused = inspect_verified_ubuntu_iso(&iso, &root, verified).unwrap();
+        assert_eq!(reused.analysis.fingerprint, verified);
 
         fs::File::options()
             .write(true)
@@ -626,10 +678,31 @@ mod tests {
         let bytes = vec![0x5A_u8; 65_537];
         fs::write(&source, &bytes).unwrap();
         let mut copied = 0_u64;
-        let hash =
-            copy_file_verified(&source, &destination, true, |count| copied += count).unwrap();
+        let hash = copy_file_verified(&source, &destination, true, |count| {
+            copied += count;
+            Ok(())
+        })
+        .unwrap();
         assert_eq!(copied, bytes.len() as u64);
         assert_eq!(hash, Sha256::digest(&bytes).as_slice());
         assert_eq!(fs::read(destination).unwrap(), bytes);
+    }
+
+    #[test]
+    fn cancelled_copy_removes_the_partial_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.bin");
+        let destination = temp.path().join("destination.bin");
+        fs::write(&source, vec![0xA5; 64 * 1024]).unwrap();
+
+        let error = copy_file_verified(&source, &destination, false, |_| {
+            Err(OperationError::new(
+                ErrorCode::Cancelled,
+                "cancelled during copy",
+            ))
+        })
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Cancelled);
+        assert!(!destination.exists());
     }
 }

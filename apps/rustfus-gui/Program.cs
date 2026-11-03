@@ -96,6 +96,7 @@ internal static class Program
     private static bool ubuntuAutoinstallSupported;
     private static volatile BridgeSession session;
     private static bool busy;
+    private static int cancellationRequested;
     private static string lastLoggedPhase = "";
     private static int lastLoggedBucket = -1;
 
@@ -564,6 +565,7 @@ internal static class Program
                          ", installation automation " + (automationConfig.Length > 0));
         lastLoggedPhase = "";
         lastLoggedBucket = -1;
+        Interlocked.Exchange(ref cancellationRequested, 0);
         busy = true;
         progress.Value = 0;
         status.Text = "Starting the media writer, then re-verifying the ISO and USB device...";
@@ -586,9 +588,10 @@ internal static class Program
             s = Bridge.StartSession(deviceId, image, label, verifyReadBack, automationConfig,
                                     confirmation);
             session = s;
+            if (Volatile.Read(ref cancellationRequested) != 0) { SendCancellation(s); }
             SessionLog.Write("Media writer accepted the plan: mode " + Bridge.Str(s.Plan, "mode") + ", " +
                              FormatSize(Bridge.Num(s.Plan, "bytes_to_write")) + " to write");
-            Ui(delegate { status.Text = "Media writer started; re-verifying the source image before writing..."; });
+            Ui(delegate { status.Text = "Source verified; preparing the USB media..."; });
             while (true)
             {
                 Dictionary<string, object> ev = s.NextEvent();
@@ -613,6 +616,7 @@ internal static class Program
         finally
         {
             session = null;
+            Interlocked.Exchange(ref cancellationRequested, 0);
             if (s != null) { s.Dispose(); }
             Ui(delegate
             {
@@ -672,19 +676,19 @@ internal static class Program
 
     private static void CancelOperation()
     {
+        if (Interlocked.Exchange(ref cancellationRequested, 1) != 0)
+        {
+            status.Text = "Cancellation is already pending...";
+            return;
+        }
+        status.Text = "Cancellation requested; finishing the current safe block...";
+        SessionLog.Write("Cancellation requested");
         BridgeSession s = session;
         if (s != null)
         {
-            try
-            {
-                s.Cancel();
-                status.Text = "Cancellation requested...";
-                SessionLog.Write("Cancellation requested");
-            }
-            catch (BridgeException ex)
-            {
-                if (!ex.IsClosed) { status.Text = "Cancel failed: " + ex.Message; }
-            }
+            Thread thread = new Thread(new ThreadStart(delegate { SendCancellation(s); }));
+            thread.IsBackground = true;
+            thread.Start();
             return;
         }
         if (demo)
@@ -692,6 +696,24 @@ internal static class Program
             demoTimer.Stop();
             progress.Value = 0;
             status.Text = "Cancelled";
+            Interlocked.Exchange(ref cancellationRequested, 0);
+        }
+    }
+
+    private static void SendCancellation(BridgeSession target)
+    {
+        try
+        {
+            target.Cancel();
+        }
+        catch (BridgeException ex)
+        {
+            if (!ex.IsClosed)
+            {
+                Interlocked.Exchange(ref cancellationRequested, 0);
+                SessionLog.Write("Cancel failed: " + ex.Message);
+                Ui(delegate { status.Text = "Cancel failed: " + ex.Message; });
+            }
         }
     }
 

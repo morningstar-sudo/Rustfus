@@ -130,17 +130,17 @@ impl<R: Read, W: Write> Session<R, W> {
             WorkerResponse::Plan { plan } => plan,
             other => return Err(unexpected(other)),
         };
-        write_frame(
+        match exchange(
+            &mut reader,
             &mut writer,
-            &Envelope::new(
-                Uuid::new_v4(),
-                WorkerRequest::Start {
-                    plan_id: plan.id,
-                    confirmation: request.confirmation,
-                },
-            ),
-        )
-        .map_err(|e| io_error(&e))?;
+            WorkerRequest::Start {
+                plan_id: plan.id,
+                confirmation: request.confirmation,
+            },
+        )? {
+            WorkerResponse::Accepted => {}
+            other => return Err(unexpected(other)),
+        }
         let session = Self {
             plan_id: plan.id,
             reader: Mutex::new(reader),
@@ -443,14 +443,13 @@ mod tests {
                 },
             );
         });
-        let (session, _) =
-            Session::open(client.0, client.1, open_request("erase"), Duration::ZERO).unwrap();
+        let Err(error) = Session::open(client.0, client.1, open_request("erase"), Duration::ZERO)
+        else {
+            panic!("the rejected Start request unexpectedly succeeded");
+        };
         assert_eq!(
-            session.next_event(),
-            Err(SessionError::Operation(OperationError::new(
-                ErrorCode::ConfirmationRequired,
-                "no"
-            )))
+            error,
+            OperationError::new(ErrorCode::ConfirmationRequired, "no")
         );
         handle.join().unwrap();
     }

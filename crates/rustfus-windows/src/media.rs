@@ -17,7 +17,8 @@ use rustfus_disk::{Fat32Layout, MbrPartition, format_empty_fat32, write_mbr};
 use rustfus_image::{
     InstallImage, STREAM_BUFFER_BYTES, UbuntuMediaManifest, WindowsMediaManifest,
     analyze_hybrid_iso, analyze_mounted_ubuntu_iso, analyze_mounted_windows_iso,
-    copy_file_verified_with_buffer, fingerprint_file_with_buffer,
+    copy_file_verified_with_buffer, fingerprint_file_with_buffer, inspect_verified_ubuntu_iso,
+    inspect_verified_windows_iso,
 };
 use sha2::{Digest, Sha256};
 use std::ffi::c_void;
@@ -240,13 +241,8 @@ where
     }
     check_cancelled(cancellation, false)?;
     let mounted = MountedIso::attach(&plan.source)?;
-    let manifest = analyze_mounted_windows_iso(&plan.source, &mounted.root)?;
-    if manifest.analysis.fingerprint != plan.image_fingerprint {
-        return Err(OperationError::new(
-            ErrorCode::ImageChanged,
-            "The Windows ISO changed after the operation was planned",
-        ));
-    }
+    let manifest =
+        inspect_verified_windows_iso(&plan.source, &mounted.root, plan.image_fingerprint)?;
     verify_trusted_executable(&manifest.bootsect_path)?;
     ensure_temporary_space(manifest.analysis.temporary_bytes)?;
 
@@ -257,15 +253,21 @@ where
     let unattend = unattend
         .map(rustfus_core::UnattendConfig::to_xml_bytes)
         .transpose()?;
-    copy_windows_tree(
+    let result = copy_windows_tree(
         &manifest,
         &target_root,
         plan.verify,
         unattend.as_deref(),
         cancellation,
         progress,
-    )?;
-    Ok(())
+    );
+    if result
+        .as_ref()
+        .is_err_and(|error| error.code == ErrorCode::Cancelled)
+    {
+        let _ = flush_volume(&target_root);
+    }
+    result
 }
 
 pub fn create_ubuntu_installer<F>(
@@ -287,31 +289,32 @@ where
     config.validate()?;
     check_cancelled(cancellation, false)?;
     let mounted = MountedIso::attach(&plan.source)?;
-    let manifest = analyze_mounted_ubuntu_iso(&plan.source, &mounted.root)?;
+    let manifest =
+        inspect_verified_ubuntu_iso(&plan.source, &mounted.root, plan.image_fingerprint)?;
     if manifest.analysis.required_bytes == 0 {
         return Err(OperationError::new(
             ErrorCode::UnsupportedLargeFile,
             "Ubuntu autoinstall cannot use this image because it contains a file larger than FAT32's 4 GiB per-file limit",
         ));
     }
-    if manifest.analysis.fingerprint != plan.image_fingerprint {
-        return Err(OperationError::new(
-            ErrorCode::ImageChanged,
-            "The Ubuntu ISO changed after the operation was planned",
-        ));
-    }
-
     emit(&mut progress, OperationPhase::Prepare, 0, 1, Instant::now());
     let target_root = prepare_fat32_target(device, &plan.volume_label)?;
     check_cancelled(cancellation, true)?;
-    copy_ubuntu_tree(
+    let result = copy_ubuntu_tree(
         &manifest,
         &target_root,
         config,
         plan.verify,
         cancellation,
         progress,
-    )
+    );
+    if result
+        .as_ref()
+        .is_err_and(|error| error.code == ErrorCode::Cancelled)
+    {
+        let _ = flush_volume(&target_root);
+    }
+    result
 }
 
 fn copy_ubuntu_tree<F>(
@@ -376,6 +379,7 @@ where
                 false,
                 &mut io_buffer,
                 |count| {
+                    check_cancelled(cancellation, true)?;
                     completed = completed.saturating_add(count);
                     emit(
                         &mut progress,
@@ -384,6 +388,7 @@ where
                         total.max(completed),
                         started,
                     );
+                    Ok(())
                 },
             )?;
             written_files.push((destination, expected, file.size_bytes));
@@ -690,6 +695,7 @@ where
             false,
             &mut io_buffer,
             |count| {
+                check_cancelled(cancellation, true)?;
                 completed = completed.saturating_add(count);
                 emit(
                     &mut progress,
@@ -698,6 +704,7 @@ where
                     total.max(completed),
                     started,
                 );
+                Ok(())
             },
         )?;
         written_files.push((destination, expected, file.size_bytes));
@@ -736,6 +743,7 @@ where
                 false,
                 &mut io_buffer,
                 |count| {
+                    check_cancelled(cancellation, true)?;
                     completed = completed.saturating_add(count);
                     emit(
                         &mut progress,
@@ -744,6 +752,7 @@ where
                         total.max(completed),
                         started,
                     );
+                    Ok(())
                 },
             )?;
             written_files.push((destination, expected, part_size));

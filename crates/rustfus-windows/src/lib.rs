@@ -106,7 +106,7 @@ where
 
     source.seek(SeekFrom::Start(0)).map_err(io_error)?;
     target.seek(SeekFrom::Start(0)).map_err(io_error)?;
-    let expected = copy_source(
+    let expected = match copy_source(
         source,
         target,
         source_length,
@@ -114,7 +114,16 @@ where
         sector_size,
         cancellation,
         &mut progress,
-    )?;
+    ) {
+        Ok(expected) => expected,
+        Err(error) => {
+            // Cancellation can leave a partially written raw image. Best-effort flush everything
+            // already accepted by the OS before the handle and volume locks are released.
+            let _ = target.flush();
+            let _ = durable_sync(target);
+            return Err(error);
+        }
+    };
     target.flush().map_err(io_error)?;
     durable_sync(target)?;
 
@@ -592,6 +601,7 @@ mod tests {
     fn cancellation_after_first_chunk_marks_media_incomplete() {
         let token = CancellationToken::default();
         let callback_token = token.clone();
+        let synced = std::cell::Cell::new(false);
         let bytes = vec![0x4D_u8; RAW_BLOCK_BYTES + 512];
         let mut source = Cursor::new(bytes.clone());
         let mut target = Cursor::new(vec![0_u8; bytes.len()]);
@@ -604,7 +614,10 @@ mod tests {
                 verify: true,
                 cancellation: &token,
             },
-            |_| Ok(()),
+            |_| {
+                synced.set(true);
+                Ok(())
+            },
             move |progress| {
                 if progress.phase == OperationPhase::Write && progress.completed_bytes > 0 {
                     callback_token.cancel();
@@ -614,6 +627,10 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::Cancelled);
         assert!(error.message.contains("incomplete"));
+        assert!(
+            synced.get(),
+            "partial raw writes must be flushed on cancellation"
+        );
     }
 
     #[test]

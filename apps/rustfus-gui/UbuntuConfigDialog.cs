@@ -110,8 +110,8 @@ internal sealed class UbuntuConfigDialog : Window
         buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         Button generate = new Button { Content = "Generate / refresh YAML", MinWidth = 180, MinHeight = 36, Margin = new Thickness(0, 0, 8, 0) };
-        Button cancel = new Button { Content = "Cancel", Width = 100, MinHeight = 36, Margin = new Thickness(0, 0, 8, 0), IsCancel = true };
-        Button use = new Button { Content = "Use this config", Width = 140, MinHeight = 36, IsDefault = true };
+        Button cancel = new Button { Content = "Cancel", MinWidth = 100, MinHeight = 36, Margin = new Thickness(0, 0, 8, 0), IsCancel = true };
+        Button use = new Button { Content = "Use this config", MinWidth = 140, MinHeight = 36, IsDefault = true };
         use.SetResourceReference(StyleProperty, "Primary");
         generate.Click += delegate { GenerateYaml(); tabs.SelectedIndex = 5; };
         use.Click += delegate { Accept(); };

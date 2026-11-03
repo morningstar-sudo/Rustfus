@@ -108,6 +108,9 @@ fn run_transport<R: Read>(
                 } else if let Some(operation) = prepared.remove(&plan_id) {
                     let cancellation = CancellationToken::default();
                     cancellations.insert(plan_id, cancellation.clone());
+                    // Acknowledge and flush before the operation thread can emit events. This
+                    // gives the client a deterministic Start -> Accepted -> Event ordering.
+                    send_response(&writer, request.request_id, WorkerResponse::Accepted)?;
                     spawn_operation(
                         operation,
                         confirmation,
@@ -116,7 +119,7 @@ fn run_transport<R: Read>(
                         Arc::clone(&operation_active),
                         request.request_id,
                     );
-                    WorkerResponse::Accepted
+                    continue;
                 } else {
                     operation_active.store(false, Ordering::Release);
                     WorkerResponse::Error {
@@ -159,6 +162,10 @@ struct PreparedOperation {
     image: ImageAnalysis,
     #[cfg_attr(not(windows), allow(dead_code))]
     automation: Option<InstallAutomation>,
+    /// Denies write/delete sharing from before fingerprinting until the operation finishes, so the
+    /// verified ISO cannot change while later stages inspect its mounted file tree.
+    #[cfg(windows)]
+    _source_guard: std::fs::File,
 }
 
 fn prepare_operation(
@@ -168,6 +175,8 @@ fn prepare_operation(
     verify: bool,
     automation: Option<InstallAutomation>,
 ) -> Result<PreparedOperation, OperationError> {
+    #[cfg(windows)]
+    let source_guard = rustfus_windows::open_source_image(&untrusted_image.path)?;
     let image = rustfus_windows::analyze_image(&untrusted_image.path)?;
     if image.fingerprint != untrusted_image.fingerprint {
         return Err(OperationError::new(
@@ -195,6 +204,8 @@ fn prepare_operation(
         plan,
         image,
         automation,
+        #[cfg(windows)]
+        _source_guard: source_guard,
     })
 }
 
@@ -214,7 +225,7 @@ fn spawn_operation(
             WorkerResponse::Event {
                 plan_id,
                 event: OperationEvent::PhaseChanged {
-                    phase: OperationPhase::Analyze,
+                    phase: OperationPhase::Prepare,
                 },
             },
         );
@@ -267,12 +278,11 @@ where
 
     #[cfg(windows)]
     {
-        let current_image = rustfus_windows::analyze_image(&operation.image.path)?;
         let current_device = fresh_device(operation.plan.disk_number)?;
         operation
             .plan
-            .revalidate(&current_device, &current_image, confirmation)?;
-        if rustfus_windows::path_is_on_disk(&current_image.path, current_device.disk_number)? {
+            .revalidate(&current_device, &operation.image, confirmation)?;
+        if rustfus_windows::path_is_on_disk(&operation.image.path, current_device.disk_number)? {
             return Err(OperationError::new(
                 ErrorCode::UnsafeTarget,
                 "The source image is stored on the selected target disk",
@@ -290,14 +300,14 @@ where
                     ));
                 }
 
-                let mut source = rustfus_windows::open_source_image(&current_image.path)?;
+                let mut source = rustfus_windows::open_source_image(&operation.image.path)?;
                 let mut target =
                     rustfus_windows::open_physical_disk(current_device.disk_number, true)?;
                 rustfus_windows::write_raw_image(
                     &mut source,
                     &mut target,
                     rustfus_windows::RawWriteOptions {
-                        source_length: current_image.size_bytes,
+                        source_length: operation.image.size_bytes,
                         sector_alignment: current_device.physical_sector_size,
                         verify: operation.plan.verify,
                         cancellation,
