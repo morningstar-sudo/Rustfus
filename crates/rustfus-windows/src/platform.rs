@@ -585,9 +585,8 @@ impl NamedPipeServer {
             .ok_or_else(|| OperationError::new(ErrorCode::Internal, "Pipe was already accepted"))?;
         let started = Instant::now();
         loop {
-            let connected = unsafe {
-                ConnectNamedPipe(file.as_raw_handle().cast(), ptr::null_mut())
-            };
+            let connected =
+                unsafe { ConnectNamedPipe(file.as_raw_handle().cast(), ptr::null_mut()) };
             if connected != 0 {
                 break;
             }

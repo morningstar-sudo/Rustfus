@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 
+#[cfg(not(windows))]
 pub fn run_stdio() -> Result<(), Box<dyn std::error::Error>> {
     // Stdio keeps the request loop testable in WSL. The desktop front end connects the same
     // protocol to an authenticated named pipe in production.
